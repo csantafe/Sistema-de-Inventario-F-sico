@@ -49,7 +49,11 @@ function invfacil_pantalla_puntos() {
                     <label>Asignar Jefe de Punto / Producción</label>
                     <select name="jefe_id" required>
                         <option value="">-- Seleccione al Jefe Responsable --</option>
-                        <?php foreach ( $jefes as $j ) echo "<option value='{$j->ID}'>{$j->display_name} ({$j->user_email})</option>"; ?>
+                        <?php foreach ( $jefes as $j ) {
+                            $nombre_j = trim($j->first_name . ' ' . $j->last_name);
+                            $nombre_j = !empty($nombre_j) ? $nombre_j : $j->display_name;
+                            echo "<option value='{$j->ID}'>{$nombre_j} ({$j->user_email})</option>";
+                        } ?>
                     </select>
                 </div>
                 <button type="submit" name="invfacil_guardar_punto" class="button button-primary button-large">Guardar Punto de Atención</button>
