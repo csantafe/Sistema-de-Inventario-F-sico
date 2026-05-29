@@ -181,7 +181,7 @@ function invfacil_shortcode_elaborar() {
         $instrucciones = "<strong>⚠️ RECONTEO REQUERIDO:</strong> Verifique únicamente estos productos.";
     } else {
         $items_pendientes = $wpdb->get_results($wpdb->prepare("SELECT * FROM $tabla_items WHERE conteo_id = %d", $conteo_pendiente->id));
-        $instrucciones = "<strong>Instrucciones:</strong> Cuente físicamente e ingrese la cantidad. <em>(Puede usar comas o puntos para los decimales)</em>.";
+        $instrucciones = "<strong>Instrucciones:</strong> Cuente físicamente e ingrese la cantidad. Botella de 750ML equivale a 24 Tragos; Botella de 700 ML 20 Tragos<em>(Puede usar comas o puntos para los decimales)</em>.";
     }
 
     $productos_erp = $wpdb->get_results("SELECT codigo, nombre FROM $tabla_prod_erp ORDER BY nombre ASC");
@@ -1185,14 +1185,22 @@ function invfacil_render_panel_full($modo = 'admin') {
                                 <label class="front-label">Verificador Asignado</label>
                                 <select name="verificador_id" class="front-select" required>
                                     <option value="">-- Seleccionar Verificador --</option>
-                                    <?php foreach ( $verificadores as $v ) echo "<option value='{$v->ID}'>{$v->display_name}</option>"; ?>
+                                    <?php foreach ( $verificadores as $v ) {
+                                        $nombre_v = trim($v->first_name . ' ' . $v->last_name);
+                                        $nombre_v = !empty($nombre_v) ? $nombre_v : $v->display_name;
+                                        echo "<option value='{$v->ID}'>{$nombre_v}</option>";
+                                    } ?>
                                 </select>
                             </div>
                             <div class="front-col">
                                 <label class="front-label">Jefe de Punto Asignado</label>
                                 <select name="jefe_id" class="front-select" required>
                                     <option value="">-- Seleccionar Jefe --</option>
-                                    <?php foreach ( $jefes as $j ) echo "<option value='{$j->ID}'>{$j->display_name}</option>"; ?>
+                                    <?php foreach ( $jefes as $j ) {
+                                        $nombre_j = trim($j->first_name . ' ' . $j->last_name);
+                                        $nombre_j = !empty($nombre_j) ? $nombre_j : $j->display_name;
+                                        echo "<option value='{$j->ID}'>{$nombre_j}</option>";
+                                    } ?>
                                 </select>
                             </div>
                         </div>
