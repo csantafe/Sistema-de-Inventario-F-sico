@@ -189,13 +189,33 @@ function invfacil_pantalla_admin() {
                         <div class="inv-col">
                             <label class="inv-label">Verificador</label>
                             <select name="verificador_id" class="inv-select" required>
-                                <?php foreach ( $verificadores as $v ) echo "<option value='{$v->ID}' ".selected($conteo_a_editar->verificador_id, $v->ID, false).">{$v->display_name}</option>"; ?>
+                                <?php foreach ( $verificadores as $v ) {
+                                    $nombre_v = trim($v->first_name . ' ' . $v->last_name);
+                                    $nombre_v = !empty($nombre_v) ? $nombre_v : $v->display_name;
+                                    // Para el formulario de Editar:
+                                    if(isset($conteo_a_editar)) {
+                                        echo "<option value='{$v->ID}' ".selected($conteo_a_editar->verificador_id, $v->ID, false).">{$nombre_v}</option>";
+                                    } else {
+                                    // Para el formulario de Nueva Asignación:
+                                        echo "<option value='{$v->ID}'>{$nombre_v}</option>";
+                                    }
+                                } ?>
                             </select>
                         </div>
                         <div class="inv-col">
                             <label class="inv-label">Jefe de Punto</label>
                             <select name="jefe_id" class="inv-select" required>
-                                <?php foreach ( $jefes as $j ) echo "<option value='{$j->ID}' ".selected($conteo_a_editar->jefe_id, $j->ID, false).">{$j->display_name}</option>"; ?>
+                                <?php foreach ( $jefes as $j ) {
+                                    $nombre_j = trim($j->first_name . ' ' . $j->last_name);
+                                    $nombre_j = !empty($nombre_j) ? $nombre_j : $j->display_name;
+                                    // Para el formulario de Editar:
+                                    if(isset($conteo_a_editar)) {
+                                        echo "<option value='{$j->ID}' ".selected($conteo_a_editar->jefe_id, $j->ID, false).">{$nombre_j}</option>";
+                                    } else {
+                                    // Para el formulario de Nueva Asignación:
+                                        echo "<option value='{$j->ID}'>{$nombre_j}</option>";
+                                    }
+                                } ?>
                             </select>
                         </div>
                     </div>
@@ -228,14 +248,34 @@ function invfacil_pantalla_admin() {
                             <label class="inv-label">Verificador</label>
                             <select name="verificador_id" class="inv-select" required>
                                 <option value="">-- Seleccionar --</option>
-                                <?php foreach ( $verificadores as $v ) echo "<option value='{$v->ID}'>{$v->display_name}</option>"; ?>
+                                <?php foreach ( $verificadores as $v ) {
+                                    $nombre_v = trim($v->first_name . ' ' . $v->last_name);
+                                    $nombre_v = !empty($nombre_v) ? $nombre_v : $v->display_name;
+                                    // Para el formulario de Editar:
+                                    if(isset($conteo_a_editar)) {
+                                        echo "<option value='{$v->ID}' ".selected($conteo_a_editar->verificador_id, $v->ID, false).">{$nombre_v}</option>";
+                                    } else {
+                                    // Para el formulario de Nueva Asignación:
+                                        echo "<option value='{$v->ID}'>{$nombre_v}</option>";
+                                    }
+                                } ?>
                             </select>
                         </div>
                         <div class="inv-col">
                             <label class="inv-label">Jefe de Punto</label>
                             <select name="jefe_id" class="inv-select" required>
                                 <option value="">-- Seleccionar --</option>
-                                <?php foreach ( $jefes as $j ) echo "<option value='{$j->ID}'>{$j->display_name}</option>"; ?>
+                                <?php foreach ( $jefes as $j ) {
+                                    $nombre_j = trim($j->first_name . ' ' . $j->last_name);
+                                    $nombre_j = !empty($nombre_j) ? $nombre_j : $j->display_name;
+                                    // Para el formulario de Editar:
+                                    if(isset($conteo_a_editar)) {
+                                        echo "<option value='{$j->ID}' ".selected($conteo_a_editar->jefe_id, $j->ID, false).">{$nombre_j}</option>";
+                                    } else {
+                                    // Para el formulario de Nueva Asignación:
+                                        echo "<option value='{$j->ID}'>{$nombre_j}</option>";
+                                    }
+                                } ?>
                             </select>
                         </div>
                     </div>
