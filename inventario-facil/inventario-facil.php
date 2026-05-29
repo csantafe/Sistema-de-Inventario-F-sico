@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Inventario y Traslados Fácil
  * Description: Control de inventarios y traslados con integración AZSign y Bitácora de Auditoría.
- * Version: 4.2
+ * Version: 5.0
  * Author: Carlos Santafe
  */
 
@@ -800,7 +800,7 @@ function invfacil_interceptor_conversiones() {
 
                             // LA TOLERANCIA (±0.03): Si la diferencia es minúscula, lo cuadramos a la perfección
                             $diferencia = abs($cantidad_calculada - $cantidad_esperada);
-                            if ($diferencia > 0 && $diferencia <= 0.035) { 
+                            if ($diferencia > 0 && $diferencia <= 0.3) { 
                                 $cantidad_calculada = $cantidad_esperada; 
                             }
 
@@ -817,7 +817,7 @@ function invfacil_interceptor_conversiones() {
                     // B. NO HUBO CONVERSIÓN, PERO APLICAMOS TOLERANCIA POR SI ACASO (Ej: pesaron en gramos directamente y falló por 0.01)
                     else {
                         $diferencia = abs($cant_contada - $cantidad_esperada);
-                        if ($diferencia > 0 && $diferencia <= 0.035) {
+                        if ($diferencia > 0 && $diferencia <= 0.3) {
                             $_POST['items'][$item_id]['cantidad'] = number_format($cantidad_esperada, 3, '.', '');
                         }
                     }
