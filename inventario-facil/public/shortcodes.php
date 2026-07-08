@@ -22,7 +22,6 @@ function invfacil_shortcode_elaborar() {
 
     $conteo_pendiente = $wpdb->get_row($wpdb->prepare("SELECT * FROM $tabla_conteos WHERE verificador_id = %d AND estado = 'pendiente' LIMIT 1", $usuario_actual->ID));
 
-    // BYPASS MAX_INPUT_VARS: Abrir la "maleta" JSON si existe
     if ( !empty($_POST['maleta_json']) ) {
         $datos_desempaquetados = json_decode(stripslashes($_POST['maleta_json']), true);
         if (is_array($datos_desempaquetados)) {
@@ -41,7 +40,6 @@ function invfacil_shortcode_elaborar() {
 
         if ( isset($_POST['items']) ) {
             foreach($_POST['items'] as $item_id => $datos) {
-                // Matemática estricta a 2 decimales
                 $cant_raw = preg_replace('/[^\d.,-]/', '', sanitize_text_field($datos['cantidad']));
                 $cant_limpia = str_replace(',', '.', $cant_raw);
                 $cant_sql = number_format(floatval($cant_limpia), 2, '.', '');
@@ -189,20 +187,6 @@ function invfacil_shortcode_elaborar() {
 
     ob_start();
     ?>
-    <style>
-        .inv-facil-form { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 20px auto; background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .inv-instrucciones { font-size: 18px; text-align: center; color: #3c434a; margin-bottom: 25px; line-height: 1.4; background: #f0f6fc; padding: 20px; border-radius: 8px;}
-        .inv-caja-producto { background: #f6f7f7; padding: 25px; margin-bottom: 30px; border: 2px solid #c3c4c7; border-radius: 12px; }
-        .inv-titulo-prod { font-size: 24px; font-weight: bold; color: #1d2327; margin-bottom: 10px; display: block; border-bottom: 2px dashed #ccc; padding-bottom: 10px;}
-        .inv-facil-form label { font-weight: bold; font-size: 18px; display: block; margin-top: 15px; color: #2c3338; }
-        .inv-facil-form input, .inv-facil-form textarea, .inv-facil-form select { width: 100%; padding: 15px; font-size: 20px; margin-top: 8px; border: 2px solid #8c8f94; border-radius: 8px; box-sizing: border-box; background: #fff;}
-        .inv-btn-enviar { background-color: #135e96; color: white; padding: 25px 30px; font-size: 26px; font-weight: bold; border: none; border-radius: 10px; width: 100%; margin-top: 30px; cursor: pointer; transition: 0.2s;}
-        .inv-btn-agregar { background-color: #f0f6fc; color: #135e96; border: 2px dashed #135e96; padding: 20px; font-size: 22px; font-weight: bold; border-radius: 10px; width: 100%; margin-top: 10px; cursor: pointer; }
-        .badge-req { color: #d63638; font-size: 16px; }
-        .inv-buscador { border: 3px solid #135e96 !important; background: #f0f6fc; padding: 20px !important; font-size: 24px !important; border-radius: 10px; box-shadow: 0 4px 10px rgba(19, 94, 150, 0.15);}
-        .sticky-search { position: sticky; top: 10px; z-index: 100; margin-bottom: 30px; }
-    </style>
-
     <div class="inv-facil-form">
         <?php echo $mensaje; ?>
         <h2 style="font-size: 34px; color: #135e96; text-align: center;">Punto: <?php echo esc_html($nombre_sede_mostrar); ?></h2>
@@ -231,11 +215,7 @@ function invfacil_shortcode_elaborar() {
                             <div style="flex: 1;">
                                 <label>En (Unidad) <span class="badge-req">*</span></label>
                                 <select name="items[<?php echo $item->id; ?>][unidad_conteo]" required>
-                                    <?php 
-                                    // 🚀 INYECCIÓN DE INTELIGENCIA:
-                                    // Le enviamos al helper la Unidad que exige el ERP y la que el usuario ya había seleccionado (si aplica)
-                                    echo invfacil_generar_opciones_unidad($item->unidad_sistema, $item->unidad_conteo); 
-                                    ?>
+                                    <?php echo invfacil_generar_opciones_unidad($item->unidad_sistema, $item->unidad_conteo); ?>
                                 </select>
                             </div>
                         </div>
@@ -266,6 +246,16 @@ function invfacil_shortcode_elaborar() {
     </div>
 
     <script>
+        // CAPTURADOR GLOBAL DE ERRORES JS
+        window.onerror = function(mensaje, origen, linea, columna, error) {
+            if (typeof invfacil_ajax !== 'undefined') {
+                let errorData = new FormData();
+                errorData.append('action', 'invfacil_log_js_error');
+                errorData.append('error_msg', mensaje + " en linea " + linea);
+                fetch(invfacil_ajax.url, { method: 'POST', body: errorData }).catch(e => {});
+            }
+        };
+
         function filtrarInventario() {
             let filtro = document.getElementById('buscador-inventario').value.toLowerCase();
             let cajas = document.getElementsByClassName('caja-item-filtro');
@@ -352,6 +342,21 @@ function invfacil_shortcode_elaborar() {
         // PARACAÍDAS JS: 2 PASOS + JSON MALETA
         function procesarParacaidasYEnviar(e, form) {
             e.preventDefault(); 
+            
+            // 🚀 VALIDACIÓN ANTI-CEROS
+            let sumaCantidades = 0;
+            let inputsCantidad = form.querySelectorAll('input[name*="[cantidad]"]');
+            
+            inputsCantidad.forEach(inp => {
+                let val = parseFloat(inp.value.replace(',', '.').replace(/[^\d.-]/g, ''));
+                if(!isNaN(val)) { sumaCantidades += val; }
+            });
+
+            if (sumaCantidades <= 0) {
+                alert('🛡️ BLOQUEO DE SEGURIDAD: El inventario está completamente vacío (Suma total = 0). Para proteger la base de datos, no se puede enviar. Si hay un error de visualización, use el buscador.');
+                return false;
+            }
+
             if(!confirm('¿Revisó bien las cantidades?')) { return false; }
             
             let btn = form.querySelector('.inv-btn-enviar');
@@ -407,7 +412,6 @@ function invfacil_shortcode_elaborar() {
             localStorage.removeItem('invfacil_borrador_' + pId);
             window.onbeforeunload = null;
 
-            // BYPASS MAX_INPUT_VARS: Empaquetar en JSON
             let itemsParaEnviar = {};
             let items = form.querySelectorAll('.caja-item-filtro');
             
@@ -423,7 +427,6 @@ function invfacil_shortcode_elaborar() {
                         observaciones: item.querySelector(`[name="items[${idReal}][observaciones]"]`)?.value || ''
                     };
                     
-                    // Desactivar los inputs originales para que el servidor no los cuente
                     item.querySelectorAll('input, select, textarea').forEach(inp => {
                         if(inp.name.includes('items[')) inp.disabled = true;
                     });
@@ -467,16 +470,6 @@ function invfacil_shortcode_historico() {
 
     ob_start();
     ?>
-    <style>
-        .inv-hist-wrap { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .inv-hist-wrap h2 { font-size: 32px; color: #135e96; text-align: center; border-bottom: 3px solid #135e96; padding-bottom: 10px; }
-        .inv-tarjeta { background: #f0f6fc; border: 1px solid #c3c4c7; padding: 25px; border-radius: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
-        .inv-tarjeta-info h3 { margin: 0 0 10px 0; font-size: 24px; color: #1d2327; }
-        .inv-tarjeta-info p { margin: 5px 0; font-size: 18px; color: #50575e; }
-        .inv-btn-descarga { background: #135e96; color: #fff; text-decoration: none; padding: 15px 25px; font-size: 18px; border-radius: 8px; font-weight: bold; transition: 0.3s; display: inline-block;}
-        .inv-btn-descarga:hover { background: #0a4b78; color:#fff; }
-    </style>
-
     <div class="inv-hist-wrap">
         <h2>Histórico de Inventarios Firmados</h2>
         <p style="font-size: 20px; text-align:center; color:#555; margin-bottom: 30px;">
@@ -506,12 +499,12 @@ function invfacil_shortcode_historico() {
 }
 
 // ========================================================================
-// SHORTCODE 3: TRASLADOS [crear_traslado]
+// SHORTCODE 3: TRASLADOS [crear_traslado] CON FIRMAS EN PAD Y FORMATO REPARADO
 // ========================================================================
 add_shortcode( 'crear_traslado', 'invfacil_shortcode_crear_traslado' );
 
 function invfacil_shortcode_crear_traslado() {
-    if ( ! is_user_logged_in() ) return '<div class="notice notice-error"><p>Debe iniciar sesión.</p></div>';
+    if ( ! is_user_logged_in() ) return '<div class="inv-msj-warn"><p>Debe iniciar sesión.</p></div>';
 
     global $wpdb;
     $usuario_actual       = wp_get_current_user();
@@ -523,7 +516,7 @@ function invfacil_shortcode_crear_traslado() {
 
     static $traslado_procesado = false;
 
-    if ( isset($_POST['invfacil_cerrar_traslado']) && !$traslado_procesado ) {
+if ( isset($_POST['invfacil_cerrar_traslado']) && !$traslado_procesado ) {
         $traslado_procesado = true;
         
         $origen_raw  = explode(' - ', sanitize_text_field($_POST['bodega_origen']));
@@ -531,112 +524,169 @@ function invfacil_shortcode_crear_traslado() {
         $motivo      = sanitize_text_field($_POST['motivo']);
         $origen_id   = intval($origen_raw[0]);
         $destino_id  = intval($destino_raw[0]);
+        
+        $firma_e = isset($_POST['firma_entrega_b64']) ? $_POST['firma_entrega_b64'] : '';
+        $firma_v = isset($_POST['firma_verifica_b64']) ? $_POST['firma_verifica_b64'] : '';
+        $nombre_e = sanitize_text_field($_POST['nombre_entrega']);
+        $nombre_v = sanitize_text_field($_POST['nombre_recibe']);
 
-        $wpdb->insert($tabla_traslados, array(
-            'bodega_origen_id'  => $origen_id,
-            'bodega_destino_id' => $destino_id,
-            'tipo_salida'       => '510 TRASLADO SALIDA ENTRE BODEGAS',
-            'tipo_entrada'      => '501 TRASLADO ENTRADA ENTRE BODEGAS',
-            'estado'            => 'pendiente_erp', 
-            'elaborador_id'     => $usuario_actual->ID
-        ));
-        $traslado_id = $wpdb->insert_id;
+        // 🚀 Determinamos el nombre real de las bodegas ANTES de guardar
+        $n_origen = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $origen_id));
+        if (empty($n_origen)) $n_origen = isset($origen_raw[1]) ? trim($origen_raw[1]) : trim($origen_raw[0]);
 
-        $productos_pdf = array();
-        if ( isset($_POST['productos']) && is_array($_POST['productos']) ) {
-            foreach($_POST['productos'] as $prod) {
-                $info_prod = explode(' - ', sanitize_text_field($prod['info']), 2);
-                $codigo    = sanitize_text_field($info_prod[0]);
-                $nombre    = isset($info_prod[1]) ? sanitize_text_field($info_prod[1]) : '';
-                
-                $cant_limpia = str_replace(',', '.', sanitize_text_field($prod['cantidad']));
-                $cantidad = floatval($cant_limpia);
-                
-                $unidad    = sanitize_text_field($prod['unidad']);
+        $n_destino = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $destino_id));
+        if (empty($n_destino)) $n_destino = isset($destino_raw[1]) ? trim($destino_raw[1]) : trim($destino_raw[0]);
 
-                if(!empty($codigo) && $cantidad > 0) {
-                    $wpdb->insert($tabla_traslado_items, array(
-                        'traslado_id'     => $traslado_id,
-                        'producto_codigo' => $codigo,
-                        'producto_nombre' => $nombre,
-                        'cantidad'        => $cantidad,
-                        'unidad_medida'   => $unidad
-                    ));
-                    $productos_pdf[] = array('codigo' => $codigo, 'nombre' => $nombre, 'cantidad' => $cantidad, 'unidad' => $unidad);
+        if(empty($firma_e) || strlen($firma_e) < 1000 || empty($firma_v) || strlen($firma_v) < 1000 || empty($nombre_e) || empty($nombre_v)) {
+            $mensaje = '<div class="inv-msj-warn" style="margin-bottom:20px; padding:15px; border-left:4px solid #f59e0b; background:#fffbeb;">⚠️ Operación denegada: Ambas firmas y los nombres correspondientes son obligatorios. Asegúrese de completar todos los campos.</div>';
+        } else {
+            $wpdb->insert($tabla_traslados, array(
+                'bodega_origen_id'      => $origen_id,
+                'bodega_destino_id'     => $destino_id,
+                'bodega_origen_nombre'  => $n_origen, // Se inserta en la BD
+                'bodega_destino_nombre' => $n_destino, // Se inserta en la BD
+                'motivo'                => $motivo, // Se inserta en la BD
+                'tipo_salida'           => '510 TRASLADO SALIDA ENTRE BODEGAS',
+                'tipo_entrada'          => '501 TRASLADO ENTRADA ENTRE BODEGAS',
+                'estado'                => 'pendiente_erp', 
+                'elaborador_id'         => $usuario_actual->ID,
+                'firma_entrega'         => $firma_e,
+                'firma_verifica'        => $firma_v,
+                'nombre_entrega'        => $nombre_e,
+                'nombre_recibe'         => $nombre_v
+            ));
+            $traslado_id = $wpdb->insert_id;
+            
+            $productos_pdf = array();
+            if ( isset($_POST['productos']) && is_array($_POST['productos']) ) {
+                foreach($_POST['productos'] as $prod) {
+                    $info_prod = explode(' - ', sanitize_text_field($prod['info']), 2);
+                    $codigo    = sanitize_text_field($info_prod[0]);
+                    $nombre    = isset($info_prod[1]) ? sanitize_text_field($info_prod[1]) : '';
+                    
+                    $cant_limpia = str_replace(',', '.', sanitize_text_field($prod['cantidad']));
+                    $cantidad = floatval($cant_limpia);
+                    
+                    $unidad    = sanitize_text_field($prod['unidad']);
+
+                    if(!empty($codigo) && $cantidad > 0) {
+                        $wpdb->insert($tabla_traslado_items, array(
+                            'traslado_id'     => $traslado_id,
+                            'producto_codigo' => $codigo,
+                            'producto_nombre' => $nombre,
+                            'cantidad'        => $cantidad,
+                            'unidad_medida'   => $unidad
+                        ));
+                        $productos_pdf[] = array('codigo' => $codigo, 'nombre' => $nombre, 'cantidad' => $cantidad, 'unidad' => $unidad);
+                    }
                 }
             }
+
+            require_once plugin_dir_path( __DIR__ ) . 'includes/fpdf/fpdf.php';
+            $pdf = new FPDF('P', 'mm', 'A4');
+            $pdf->SetMargins(35, 10, 10); 
+            $pdf->AddPage();
+            
+            // 🚀 Lógica de rescate de Nombres (Fallback)
+            $n_origen = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $origen_id));
+            if (empty($n_origen)) $n_origen = isset($origen_raw[1]) ? trim($origen_raw[1]) : trim($origen_raw[0]);
+
+            $n_destino = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $destino_id));
+            if (empty($n_destino)) $n_destino = isset($destino_raw[1]) ? trim($destino_raw[1]) : trim($destino_raw[0]);
+
+            // Truncado protector a 42 caracteres para evitar desbordes
+            $n_origen_print = strlen($n_origen) > 42 ? substr($n_origen, 0, 42) . '...' : $n_origen;
+            $n_destino_print = strlen($n_destino) > 42 ? substr($n_destino, 0, 42) . '...' : $n_destino;
+
+            $pdf->SetFont('Arial', 'B', 10);
+            $pdf->Cell(35, 15, 'CLUB MILITAR', 1, 0, 'C');
+            $pdf->Cell(80, 15, 'REPORTE TRASLADO DE INVENTARIOS', 1, 0, 'C');
+            $x = $pdf->GetX();
+            $y = $pdf->GetY();
+            $pdf->SetFont('Arial', '', 8);
+            $pdf->MultiCell(50, 5, utf8_decode("CÓDIGO: AB-P10-F02\nVERSION: 1\nFECHA: 25/01/2022"), 1, 'L');
+            $pdf->SetXY($pdf->GetX(), $y + 15);
+            
+            $pdf->Ln(5);
+            $pdf->SetFont('Arial', 'B', 9);
+            $pdf->Cell(25, 8, 'MOTIVO:', 1, 0, 'C');
+            $pdf->SetFont('Arial', '', 9);
+            $pdf->Cell(90, 8, utf8_decode($motivo), 1, 0, 'L');
+            $pdf->SetFont('Arial', 'B', 9);
+            $pdf->Cell(20, 8, 'FECHA:', 1, 0, 'C');
+            $pdf->SetFont('Arial', '', 9);
+            $pdf->Cell(30, 8, date('d/m/Y'), 1, 1, 'C');
+
+            $pdf->Ln(5);
+            $pdf->SetFont('Arial', 'B', 9);
+            $pdf->Cell(165, 8, 'MOVIMIENTO DE SALIDA', 1, 1, 'C');
+            $pdf->Cell(82.5, 8, '510 TRASLADO SALIDA ENTRE BODEGAS', 1, 0, 'C');
+            $pdf->Cell(82.5, 8, '501 TRASLADO ENTRADA ENTRE BODEGAS', 1, 1, 'C');
+            $pdf->SetFont('Arial', '', 8);
+            $pdf->Cell(82.5, 8, utf8_decode($n_origen_print), 1, 0, 'C');
+            $pdf->Cell(82.5, 8, utf8_decode($n_destino_print), 1, 1, 'C');
+
+            $pdf->Ln(5);
+            $pdf->SetFont('Arial', 'B', 8);
+            $pdf->Cell(25, 8, 'CODIGO', 1, 0, 'C');
+            $pdf->Cell(70, 8, 'PRODUCTO', 1, 0, 'C');
+            $pdf->Cell(15, 8, 'CANT.', 1, 0, 'C');
+            $pdf->Cell(25, 8, 'UND.MEDIDA', 1, 0, 'C');
+            $pdf->Cell(30, 8, 'TOTAL', 1, 1, 'C');
+
+            $pdf->SetFont('Arial', '', 8);
+            foreach($productos_pdf as $p) {
+                $pdf->Cell(25, 8, utf8_decode($p['codigo']), 1, 0, 'C');
+                $nombre_corto = strlen($p['nombre']) > 40 ? substr($p['nombre'], 0, 40) . '...' : $p['nombre'];
+                $pdf->Cell(70, 8, utf8_decode($nombre_corto), 1, 0, 'L');
+                $pdf->Cell(15, 8, $p['cantidad'], 1, 0, 'C');
+                $pdf->Cell(25, 8, utf8_decode($p['unidad']), 1, 0, 'C');
+                $pdf->Cell(30, 8, '', 1, 1, 'C');
+            }
+
+            $pdf->Ln(10);
+            $x_inicial = $pdf->GetX();
+            $y_inicial = $pdf->GetY();
+            
+            $pdf->SetFont('Arial', 'B', 9);
+            $pdf->Cell(82.5, 8, utf8_decode('FIRMA DE QUIEN ENTREGA:'), 0, 0, 'C');
+            if (!empty($firma_e)) {
+                $img_e = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $firma_e));
+                $tmp_e = sys_get_temp_dir() . '/f_e_traslado_' . $traslado_id . '_' . uniqid() . '.png';
+                file_put_contents($tmp_e, $img_e);
+                $pdf->Image($tmp_e, $x_inicial + 15, $y_inicial + 8, 50, 20);
+                unlink($tmp_e);
+            }
+            
+            $pdf->SetXY($x_inicial + 82.5, $y_inicial);
+            $pdf->Cell(82.5, 8, utf8_decode('FIRMA DE QUIEN RECIBE:'), 0, 1, 'C');
+            if (!empty($firma_v)) {
+                $img_v = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $firma_v));
+                $tmp_v = sys_get_temp_dir() . '/f_v_traslado_' . $traslado_id . '_' . uniqid() . '.png';
+                file_put_contents($tmp_v, $img_v);
+                $pdf->Image($tmp_v, $x_inicial + 82.5 + 15, $y_inicial + 8, 50, 20);
+                unlink($tmp_v);
+            }
+            
+            // Impresión dinámica de los nombres digitados en el formulario
+            $pdf->SetY($y_inicial + 30);
+            $pdf->SetFont('Arial', '', 10);
+            $pdf->Cell(82.5, 8, utf8_decode('Entregado por: ' . $nombre_e), 'T', 0, 'C');
+            $pdf->Cell(82.5, 8, utf8_decode('Recibido por: ' . $nombre_v), 'T', 1, 'C');
+
+            $pdf_content = $pdf->Output('S'); 
+            $pdf_base64 = base64_encode($pdf_content);
+            
+            if(function_exists('invfacil_registrar_bitacora')) invfacil_registrar_bitacora("Elaboró el Traslado ID: #TR-$traslado_id (De '$n_origen' a '$n_destino')");
+
+            $mensaje = '
+            <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+                <strong>¡Traslado Guardado y Firmado Exitosamente!</strong><br>
+                A continuación puedes previsualizar el PDF generado.
+            </div>
+            <iframe src="data:application/pdf;base64,'.$pdf_base64.'" width="100%" height="600px" style="border: 2px solid #ccc; border-radius: 8px; margin-bottom:30px;"></iframe>';
+            $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href ); }</script>";
         }
-
-        require_once plugin_dir_path( __DIR__ ) . 'includes/fpdf/fpdf.php';
-        $pdf = new FPDF('P', 'mm', 'A4');
-        $pdf->SetMargins(35, 10, 10); 
-        $pdf->AddPage();
-        
-        $n_origen = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $origen_id));
-        $n_destino = $wpdb->get_var($wpdb->prepare("SELECT nombre_bodega FROM $tabla_bodegas WHERE id = %d", $destino_id));
-
-        $pdf->SetFont('Arial', 'B', 10);
-        $pdf->Cell(40, 15, 'CLUB MILITAR', 1, 0, 'C');
-        $pdf->Cell(100, 15, 'REPORTE TRASLADO DE INVENTARIOS', 1, 0, 'C');
-        $pdf->SetFont('Arial', '', 8);
-        $pdf->MultiCell(50, 5, utf8_decode("CÓDIGO: AB-P10-F02\nVERSION: 1\nFECHA: 25/01/2022"), 1, 'L');
-        
-        $pdf->Ln(5);
-        $pdf->SetFont('Arial', 'B', 9);
-        $pdf->Cell(30, 8, 'MOTIVO:', 1, 0, 'C');
-        $pdf->SetFont('Arial', '', 9);
-        $pdf->Cell(110, 8, utf8_decode($motivo), 1, 0, 'L');
-        $pdf->SetFont('Arial', 'B', 9);
-        $pdf->Cell(20, 8, 'FECHA:', 1, 0, 'C');
-        $pdf->SetFont('Arial', '', 9);
-        $pdf->Cell(30, 8, date('d/m/Y'), 1, 1, 'C');
-
-        $pdf->Ln(5);
-        $pdf->SetFont('Arial', 'B', 9);
-        $pdf->Cell(190, 8, 'MOVIMIENTO DE SALIDA', 1, 1, 'C');
-        $pdf->Cell(95, 8, '510 TRASLADO SALIDA ENTRE BODEGAS', 1, 0, 'C');
-        $pdf->Cell(95, 8, '501 TRASLADO ENTRADA ENTRE BODEGAS', 1, 1, 'C');
-        $pdf->SetFont('Arial', '', 9);
-        $pdf->Cell(95, 8, utf8_decode($n_origen), 1, 0, 'C');
-        $pdf->Cell(95, 8, utf8_decode($n_destino), 1, 1, 'C');
-
-        $pdf->Ln(5);
-        $pdf->SetFont('Arial', 'B', 8);
-        $pdf->Cell(25, 8, 'CODIGO', 1, 0, 'C');
-        $pdf->Cell(85, 8, 'PRODUCTO', 1, 0, 'C');
-        $pdf->Cell(20, 8, 'CANT.', 1, 0, 'C');
-        $pdf->Cell(30, 8, 'UND.MEDIDA', 1, 0, 'C');
-        $pdf->Cell(30, 8, 'TOTAL', 1, 1, 'C');
-
-        $pdf->SetFont('Arial', '', 8);
-        foreach($productos_pdf as $p) {
-            $pdf->Cell(25, 8, utf8_decode($p['codigo']), 1, 0, 'C');
-            $nombre_corto = strlen($p['nombre']) > 45 ? substr($p['nombre'], 0, 45) . '...' : $p['nombre'];
-            $pdf->Cell(85, 8, utf8_decode($nombre_corto), 1, 0, 'L');
-            $pdf->Cell(20, 8, $p['cantidad'], 1, 0, 'C');
-            $pdf->Cell(30, 8, utf8_decode($p['unidad']), 1, 0, 'C');
-            $pdf->Cell(30, 8, '', 1, 1, 'C');
-        }
-
-        $pdf->Ln(15);
-        $pdf->Cell(95, 8, '_________________________________', 0, 0, 'C');
-        $pdf->Cell(95, 8, '_________________________________', 0, 1, 'C');
-        $pdf->SetFont('Arial', 'B', 9);
-        $pdf->Cell(95, 8, 'NOMBRE DE QUIEN ENTREGA (FIRMA)', 0, 0, 'C');
-        $pdf->Cell(95, 8, 'NOMBRE DE QUIEN RECIBE (FIRMA)', 0, 1, 'C');
-
-        $pdf_content = $pdf->Output('S'); 
-        $pdf_base64 = base64_encode($pdf_content);
-        
-        if(function_exists('invfacil_registrar_bitacora')) invfacil_registrar_bitacora("Elaboró el Traslado ID: #TR-$traslado_id (De '$n_origen' a '$n_destino')");
-
-        $mensaje = '
-        <div style="background-color: #d4edda; color: #155724; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
-            <strong>¡Traslado Guardado Exitosamente!</strong><br>
-            A continuación puedes previsualizar el PDF generado.
-        </div>
-        <iframe src="data:application/pdf;base64,'.$pdf_base64.'" width="100%" height="600px" style="border: 2px solid #ccc; border-radius: 8px; margin-bottom:30px;"></iframe>';
-        $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href ); }</script>";
     }
 
     $bodegas = $wpdb->get_results("SELECT * FROM $tabla_bodegas ORDER BY nombre_bodega ASC");
@@ -644,39 +694,25 @@ function invfacil_shortcode_crear_traslado() {
 
     ob_start();
     ?>
-    <style>
-        .inv-traslado-form { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 20px auto; background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .inv-traslado-form h2 { font-size: 30px; color: #135e96; text-align: center; border-bottom: 4px solid #135e96; padding-bottom: 10px; margin-bottom: 20px; }
-        .inv-seccion { background: #f0f6fc; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #c3c4c7; }
-        .inv-seccion h3 { margin-top: 0; color: #1d2327; font-size: 20px; }
-        .inv-row { display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap; }
-        .inv-row > div { flex: 1; min-width: 200px; }
-        .inv-traslado-form label { font-weight: bold; font-size: 16px; display: block; margin-bottom: 5px; color: #2c3338; }
-        .inv-traslado-form input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #8c8f94; border-radius: 6px; box-sizing: border-box; }
-        .inv-row-producto { display: flex; gap: 15px; align-items: center; background: #fff; padding: 15px; border: 1px dashed #007cba; border-radius: 6px; margin-bottom: 10px; }
-        .inv-btn-agregar { background-color: #f0f6fc; color: #135e96; border: 2px dashed #135e96; padding: 15px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 10px; }
-        .inv-btn-cerrar { background-color: #135e96; color: white; padding: 20px; font-size: 22px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 20px; transition: 0.2s; }
-    </style>
-
     <div class="inv-traslado-form">
         <?php echo $mensaje; ?>
         <h2>Crear Traslado de Inventario</h2>
         
-        <form method="post" action="" onsubmit="let btn = this.querySelector('.inv-btn-cerrar'); btn.innerHTML = '⏳ Generando...'; btn.style.pointerEvents = 'none'; btn.style.opacity = '0.7';">
+        <form method="post" action="" id="formTraslado" onsubmit="return validarAmbasFirmasTraslado(event);">
             <div class="inv-seccion">
                 <h3>1. Origen y Destino</h3>
                 <div class="inv-row">
                     <div>
                         <label>510 TRASLADO SALIDA ENTRE BODEGAS (Origen)</label>
-                        <input type="text" name="bodega_origen" list="lista_bodegas" required>
+                        <input type="text" name="bodega_origen" list="lista_bodegas" required class="front-input">
                     </div>
                     <div>
                         <label>501 TRASLADO ENTRADA ENTRE BODEGAS (Destino)</label>
-                        <input type="text" name="bodega_destino" list="lista_bodegas" required>
+                        <input type="text" name="bodega_destino" list="lista_bodegas" required class="front-input">
                     </div>
                 </div>
                 <div class="inv-row">
-                    <div><label>Motivo</label><input type="text" name="motivo" required placeholder="Ej: Traslado por Reabastecimiento"></div>
+                    <div><label>Motivo</label><input type="text" name="motivo" required class="front-input" placeholder="Ej: Traslado por Reabastecimiento"></div>
                 </div>
             </div>
 
@@ -684,15 +720,41 @@ function invfacil_shortcode_crear_traslado() {
                 <h3>2. Productos a Trasladar</h3>
                 <div id="traslado-items-container">
                     <div class="inv-row-producto">
-                        <div style="flex: 2;"><label>Producto (Código - Nombre)</label><input type="text" name="productos[0][info]" list="lista_productos_erp" required></div>
-                        <div style="flex: 1;"><label>Cantidad</label><input type="text" inputmode="decimal" pattern="[0-9.,]+" name="productos[0][cantidad]" required></div>
-                        <div style="flex: 1;"><label>Und. Medida</label><input type="text" name="productos[0][unidad]" list="lista_unidades" required></div>
+                        <div style="flex: 2;"><label>Producto (Código - Nombre)</label><input type="text" name="productos[0][info]" list="lista_productos_erp" required class="front-input"></div>
+                        <div style="flex: 1;"><label>Cantidad</label><input type="text" inputmode="decimal" pattern="[0-9.,]+" name="productos[0][cantidad]" required class="front-input"></div>
+                        <div style="flex: 1;"><label>Und. Medida</label><input type="text" name="productos[0][unidad]" list="lista_unidades" required class="front-input"></div>
                         <div style="flex: 0.5;"></div>
                     </div>
                 </div>
                 <button type="button" class="inv-btn-agregar" onclick="agregarFilaTraslado()">➕ Agregar Otro Producto</button>
             </div>
-            <button type="submit" name="invfacil_cerrar_traslado" class="inv-btn-cerrar">✅ Generar Traslado</button>
+
+            <div class="inv-seccion">
+                <h3>3. Firmas Digitales</h3>
+                <p style="color:#64748b; font-size:14px; margin-bottom:20px;">Ambas firmas y nombres son obligatorios para autorizar y generar el PDF oficial de este traslado.</p>
+                <input type="hidden" name="firma_entrega_b64" id="firma_entrega_b64">
+                <input type="hidden" name="firma_verifica_b64" id="firma_verifica_b64">
+
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 25px;">
+                    <div style="flex: 1; min-width: 280px; text-align: center; border:2px solid #cbd5e1; background:#f8fafc; border-radius:8px; padding:15px;">
+                        <h3 style="color:#1e293b; margin-top:0;">✍️ Firma: Quien Entrega</h3>
+                        <label style="display:block; text-align:left; font-size:14px; font-weight:bold; margin-bottom:5px;">Nombre de quien entrega:</label>
+                        <input type="text" name="nombre_entrega" required class="front-input" placeholder="Nombre completo" style="margin-bottom: 10px;">
+                        <canvas id="padEntrega" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%; width:100%;"></canvas>
+                        <br><button type="button" onclick="clearPadE()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
+                    </div>
+
+                    <div style="flex: 1; min-width: 280px; text-align: center; border:2px solid #cbd5e1; background:#f8fafc; border-radius:8px; padding:15px;">
+                        <h3 style="color:#1e293b; margin-top:0;">✍️ Firma: Quien Recibe</h3>
+                        <label style="display:block; text-align:left; font-size:14px; font-weight:bold; margin-bottom:5px;">Nombre de quien recibe:</label>
+                        <input type="text" name="nombre_recibe" required class="front-input" placeholder="Nombre completo" style="margin-bottom: 10px;">
+                        <canvas id="padVerifica" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%; width:100%;"></canvas>
+                        <br><button type="button" onclick="clearPadV()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" name="invfacil_cerrar_traslado" class="inv-btn-cerrar">✅ Generar y Firmar Traslado</button>
 
             <datalist id="lista_bodegas"><?php foreach($bodegas as $b) echo "<option value='" . esc_attr($b->id . " - " . $b->nombre_bodega) . "'>"; ?></datalist>
             <datalist id="lista_productos_erp"><?php foreach($productos_erp as $p) echo "<option value='" . esc_attr($p->codigo . " - " . $p->nombre) . "'>"; ?></datalist>
@@ -707,13 +769,73 @@ function invfacil_shortcode_crear_traslado() {
             const row = document.createElement('div');
             row.className = 'inv-row-producto';
             row.innerHTML = `
-                <div style="flex: 2;"><label>Producto</label><input type="text" name="productos[${prodIndex}][info]" list="lista_productos_erp" required></div>
-                <div style="flex: 1;"><label>Cantidad</label><input type="text" inputmode="decimal" pattern="[0-9.,]+" name="productos[${prodIndex}][cantidad]" required></div>
-                <div style="flex: 1;"><label>Und. Medida</label><input type="text" name="productos[${prodIndex}][unidad]" list="lista_unidades" required></div>
+                <div style="flex: 2;"><label>Producto</label><input type="text" name="productos[${prodIndex}][info]" list="lista_productos_erp" required class="front-input"></div>
+                <div style="flex: 1;"><label>Cantidad</label><input type="text" inputmode="decimal" pattern="[0-9.,]+" name="productos[${prodIndex}][cantidad]" required class="front-input"></div>
+                <div style="flex: 1;"><label>Und. Medida</label><input type="text" name="productos[${prodIndex}][unidad]" list="lista_unidades" required class="front-input"></div>
                 <div style="flex: 0.5; text-align: center; align-self: flex-end;"><button type="button" onclick="this.parentElement.parentElement.remove()" style="background:#d63638; color:#fff; border:none; padding:12px; border-radius:6px; cursor:pointer;">❌</button></div>
             `;
             container.appendChild(row);
             prodIndex++;
+        }
+
+        // Lógica de captura y validación de las Firmas
+        const canvasE = document.getElementById('padEntrega');
+        let drawnPixelsE = 0;
+        if (canvasE) {
+            const ctxE = canvasE.getContext('2d');
+            let drawingE = false;
+            function getPosE(e) { const r = canvasE.getBoundingClientRect(); const cx = e.clientX || (e.touches && e.touches[0].clientX); const cy = e.clientY || (e.touches && e.touches[0].clientY); return { x: cx - r.left, y: cy - r.top }; }
+            canvasE.addEventListener('mousedown', (e) => { drawingE = true; drawE(e); });
+            canvasE.addEventListener('mouseup', () => { drawingE = false; ctxE.beginPath(); });
+            canvasE.addEventListener('mousemove', drawE);
+            canvasE.addEventListener('touchstart', (e) => { drawingE = true; drawE(e); }, {passive: false});
+            canvasE.addEventListener('touchend', () => { drawingE = false; ctxE.beginPath(); });
+            canvasE.addEventListener('touchmove', drawE, {passive: false});
+
+            function drawE(e) {
+                if (!drawingE) return; e.preventDefault(); const p = getPosE(e);
+                ctxE.lineWidth = 3; ctxE.lineCap = 'round'; ctxE.strokeStyle = '#1e293b';
+                ctxE.lineTo(p.x, p.y); ctxE.stroke(); ctxE.beginPath(); ctxE.moveTo(p.x, p.y);
+                drawnPixelsE++;
+            }
+            window.clearPadE = function() { ctxE.clearRect(0, 0, canvasE.width, canvasE.height); drawnPixelsE = 0; }
+        }
+
+        const canvasV = document.getElementById('padVerifica');
+        let drawnPixelsV = 0;
+        if (canvasV) {
+            const ctxV = canvasV.getContext('2d');
+            let drawingV = false;
+            function getPosV(e) { const r = canvasV.getBoundingClientRect(); const cx = e.clientX || (e.touches && e.touches[0].clientX); const cy = e.clientY || (e.touches && e.touches[0].clientY); return { x: cx - r.left, y: cy - r.top }; }
+            canvasV.addEventListener('mousedown', (e) => { drawingV = true; drawV(e); });
+            canvasV.addEventListener('mouseup', () => { drawingV = false; ctxV.beginPath(); });
+            canvasV.addEventListener('mousemove', drawV);
+            canvasV.addEventListener('touchstart', (e) => { drawingV = true; drawV(e); }, {passive: false});
+            canvasV.addEventListener('touchmove', drawV, {passive: false});
+
+            function drawV(e) {
+                if (!drawingV) return; e.preventDefault(); const p = getPosV(e);
+                ctxV.lineWidth = 3; ctxV.lineCap = 'round'; ctxV.strokeStyle = '#1e293b';
+                ctxV.lineTo(p.x, p.y); ctxV.stroke(); ctxV.beginPath(); ctxV.moveTo(p.x, p.y);
+                drawnPixelsV++;
+            }
+            window.clearPadV = function() { ctxV.clearRect(0, 0, canvasV.width, canvasV.height); drawnPixelsV = 0; }
+        }
+
+        window.validarAmbasFirmasTraslado = function(e) {
+            if (drawnPixelsE < 35 || drawnPixelsV < 35) {
+                e.preventDefault();
+                alert("⚠️ OPERACIÓN DENEGADA: Ambas firmas son obligatorias para generar el traslado.");
+                return false;
+            }
+            document.getElementById('firma_entrega_b64').value = canvasE.toDataURL('image/png');
+            document.getElementById('firma_verifica_b64').value = canvasV.toDataURL('image/png');
+            
+            let btn = e.target.querySelector('.inv-btn-cerrar');
+            btn.innerHTML = '⏳ Generando PDF Firmado...';
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.7';
+            return true;
         }
     </script>    
     <?php
@@ -743,6 +865,7 @@ function invfacil_render_panel_full($modo = 'admin') {
     if ( ! is_user_logged_in() ) return '<div style="text-align:center; padding: 20px;">Inicie sesión.</div>';
     
     $user = wp_get_current_user();
+    $verificadores = get_users(array());
     $es_admin = in_array('invfacil_admin', (array)$user->roles) || current_user_can('manage_options');
     $es_auditor = in_array('invfacil_auditor', (array)$user->roles);
 
@@ -759,7 +882,6 @@ function invfacil_render_panel_full($modo = 'admin') {
 
     static $admin_procesado = false;
 
-    // --- LÓGICA DE PROCESAMIENTO (PUNTOS DE ATENCIÓN) ---
     if ( isset($_POST['invfacil_crear_punto']) && !$admin_procesado ) {
         $admin_procesado = true;
         $nombre_punto = isset($_POST['nombre_punto']) ? sanitize_text_field($_POST['nombre_punto']) : '';
@@ -779,7 +901,6 @@ function invfacil_render_panel_full($modo = 'admin') {
         $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href.split('?')[0] ); }</script>";
     }
 
-    // A. CARGA DE BASE MAESTRA GLOBAL (Mapeo estricto EXIS: Col A = Código)
     if ( isset($_POST['cargar_maestra']) && isset($_FILES['csv_maestra']) && !$admin_procesado ) {
         $admin_procesado = true;
         $file = $_FILES['csv_maestra']['tmp_name'];
@@ -794,7 +915,6 @@ function invfacil_render_panel_full($modo = 'admin') {
             if(isset($_POST['reemplazar_maestra'])) { $wpdb->query("TRUNCATE TABLE $t_erp"); }
             while (($data = fgetcsv($handle, 10000, $delimiter)) !== FALSE) {
                 if ( isset($data[0]) && isset($data[1]) ) {
-                    // Col A (0) es Código, Col B (1) u otra es Nombre.
                     $cod = sanitize_text_field(preg_replace('/\xEF\xBB\xBF/', '', mb_convert_encoding(trim($data[0]), 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252')));
                     $nom = sanitize_text_field(mb_convert_encoding(trim($data[1]), 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252'));
                     if (!empty($cod) && strtolower($cod) !== 'codigo' && strtolower($cod) !== 'código bodega') {
@@ -810,7 +930,6 @@ function invfacil_render_panel_full($modo = 'admin') {
         $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href ); }</script>";
     }
 
-    // B. ASIGNAR INVENTARIO (Lectura EXIS 3000 con Matemática Pura)
     if ( isset($_POST['invfacil_asignar']) && !$admin_procesado ) {
         $admin_procesado = true;
         $punto_id = intval($_POST['punto_id']);
@@ -838,16 +957,12 @@ function invfacil_render_panel_full($modo = 'admin') {
 
                     while (($data = fgetcsv($handle, 10000, $delimiter)) !== FALSE) {
                         if ( isset($data[0]) && isset($data[1]) ) {
-                            // COLUMNA A = Código del Producto
                             $cod = sanitize_text_field(preg_replace('/\xEF\xBB\xBF/', '', mb_convert_encoding(trim($data[0]), 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252')));
-                            // COLUMNA B = Nombre
                             $nom = sanitize_text_field(mb_convert_encoding(trim($data[1]), 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252'));
                             
                             if (empty($cod) || strtolower($cod) === 'codigo' || strtolower($cod) === 'código bodega' || strtolower($cod) === 'código') continue;
                             
-                            // COLUMNA C = Cantidad Esperada (Asumimos C=2. Si es otra, cámbiala a $data[4] etc.)
                             $cant_raw = isset($data[2]) ? preg_replace('/[^\d.,-]/', '', trim($data[2])) : '0';
-                            // Convertir , a . y forzar formato matemático de 2 decimales para cruce perfecto
                             $cant_esp = number_format(floatval(str_replace(',', '.', $cant_raw)), 2, '.', '');
                             
                             $unidad_sys = 'Unidad';
@@ -874,7 +989,6 @@ function invfacil_render_panel_full($modo = 'admin') {
         $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href ); }</script>";
     }
 
-    // EL PUENTE (SOS BILINGÜE: Lee Paracaídas JS y Plantilla crvReporte cruzando por Código Col A)
     if ( isset($_POST['invfacil_rescatar_offline']) && isset($_FILES['csv_respaldo']) && !$admin_procesado ) {
         $admin_procesado = true;
         $conteo_id = intval($_POST['conteo_rescate_id']);
@@ -887,10 +1001,8 @@ function invfacil_render_panel_full($modo = 'admin') {
             $delimiter = (strpos($first_line, ';') !== false) ? ';' : ',';
             rewind($handle);
             
-            // Detectar Idioma del Archivo
             $es_paracaidas_js = (strpos($first_line, 'ID_Item') !== false);
-            
-            fgetcsv($handle, 10000, $delimiter); // Saltar cabecera
+            fgetcsv($handle, 10000, $delimiter); 
             
             $intento_csv = 0;
             $filas_a_procesar = array();
@@ -898,7 +1010,6 @@ function invfacil_render_panel_full($modo = 'admin') {
             while (($data = fgetcsv($handle, 10000, $delimiter)) !== FALSE) {
                 if (count($data) >= 2) {
                     if ($es_paracaidas_js) {
-                        // Modo 1: Paracaídas JS (Lee el sello y los IDs)
                         if ($intento_csv === 0 && isset($data[7])) $intento_csv = intval(trim($data[7]));
                         $filas_a_procesar[] = array(
                             'id' => intval(preg_replace('/\xEF\xBB\xBF/', '', trim($data[0]))),
@@ -910,17 +1021,14 @@ function invfacil_render_panel_full($modo = 'admin') {
                             'obs' => trim($data[6])
                         );
                     } else {
-                        // Modo 2: Plantilla crvReporte (Cruce por Código = Columna A)
-                        // Ajusta la columna de la cantidad si tu crvReporte la tiene en otro lado. (Ej: 5 es la Columna F)
                         $col_cantidad = 5; 
-                        
                         $cod_puro = preg_replace('/\xEF\xBB\xBF/', '', trim($data[0]));
                         if(!empty($cod_puro)) {
                             $cant_raw = isset($data[$col_cantidad]) ? preg_replace('/[^\d.,-]/', '', trim($data[$col_cantidad])) : '0';
                             $filas_a_procesar[] = array(
-                                'id' => 0, // No hay ID, buscaremos por código
+                                'id' => 0, 
                                 'codigo' => $cod_puro,
-                                'nombre' => isset($data[2]) ? trim($data[2]) : '', // Asume Nombre en Col C
+                                'nombre' => isset($data[2]) ? trim($data[2]) : '', 
                                 'cantidad' => number_format(floatval(str_replace(',', '.', $cant_raw)), 2, '.', ''),
                                 'unidad' => 'Unidad',
                                 'fecha' => null,
@@ -934,7 +1042,6 @@ function invfacil_render_panel_full($modo = 'admin') {
             
             if ($intento_csv === 0) $intento_csv = 1; 
             
-            // VALIDACIÓN DEL SELLO ANTI-CHOQUES (Aplica solo al Paracaídas JS)
             if ($es_paracaidas_js && $intento_csv == 1 && $conteo->intento == 2) {
                 $mensaje = "<div class='inv-msj-warn'>⚠️ <strong>Operación Denegada:</strong> Este respaldo es del Intento 1, pero el servidor ya había recibido esos datos. El verificador debe completar el Reconteo en su pantalla.</div>";
             }
@@ -942,18 +1049,14 @@ function invfacil_render_panel_full($modo = 'admin') {
                 $mensaje = "<div class='inv-msj-warn'>⚠️ <strong>Archivo Inválido:</strong> Subiendo un archivo del Intento 2 para un inventario en Intento 1.</div>";
             }
             else {
-                // Procedemos con el guardado
                 foreach ($filas_a_procesar as $d) {
                     if ( $d['id'] > 0 ) {
-                        // Viene del Paracaídas JS (Guardado directo)
                         $wpdb->update($t_items, array('cantidad' => $d['cantidad'], 'unidad_conteo' => $d['unidad'], 'fecha_vencimiento' => $d['fecha'], 'observaciones' => $d['obs']), array('id' => $d['id'], 'conteo_id' => $conteo_id));
                     } else if (!empty($d['codigo'])) {
-                        // Viene del crvReporte (Cruce por Código en Col A)
                         $existe_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM $t_items WHERE conteo_id = %d AND codigo = %s", $conteo_id, $d['codigo']));
                         if ($existe_id) {
                             $wpdb->update($t_items, array('cantidad' => $d['cantidad']), array('id' => $existe_id));
                         } else {
-                            // Producto no listado en carga inicial pero agregado en el crvReporte manual
                             $wpdb->insert($t_items, array(
                                 'conteo_id' => $conteo_id, 'codigo' => $d['codigo'], 'nombre_producto' => $d['nombre'],
                                 'cantidad_esperada' => 0.00, 'unidad_sistema' => $d['unidad'],
@@ -963,7 +1066,6 @@ function invfacil_render_panel_full($modo = 'admin') {
                     }
                 }
                 
-                // Reglas de Negocio tras cargar CSV (Matemática Estricta)
                 $generar_pdf = false;
                 if ($conteo->intento == 1) {
                     $diferencias = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $t_items WHERE conteo_id = %d AND ROUND(cantidad, 2) != ROUND(cantidad_esperada, 2)", $conteo_id));
@@ -974,7 +1076,7 @@ function invfacil_render_panel_full($modo = 'admin') {
                         $generar_pdf = true;
                     }
                 } else {
-                    $generar_pdf = true; // Si era intento 2 o una plantilla crvReporte forzada para cierre
+                    $generar_pdf = true;
                 }
 
                 if ($generar_pdf) {
@@ -1028,7 +1130,6 @@ function invfacil_render_panel_full($modo = 'admin') {
         $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href ); }</script>";
     }
 
-    // C. BORRADO Y ANULACIÓN
     if ( isset($_GET['borrar']) && isset($_GET['admin_nonce']) && wp_verify_nonce($_GET['admin_nonce'], 'admin_action') && !$admin_procesado ) {
         $admin_procesado = true;
         $borrar_id = intval($_GET['borrar']);
@@ -1046,7 +1147,6 @@ function invfacil_render_panel_full($modo = 'admin') {
         $mensaje .= "<script>if ( window.history.replaceState ) { window.history.replaceState( null, null, window.location.href.split('&')[0] ); }</script>";
     }
 
-    // Consultas
     $puntos = $wpdb->get_results("SELECT * FROM $t_puntos ORDER BY nombre_punto ASC");
     $jefes = get_users(array('role' => 'invfacil_jefe'));
     $verificadores = get_users(array('role' => 'invfacil_verificador'));
@@ -1057,75 +1157,6 @@ function invfacil_render_panel_full($modo = 'admin') {
 
     ob_start();
     ?>
-    <style>
-        /* Contenedor Principal y Pestañas */
-        .tabs-container { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 1100px; margin: 20px auto; color: #1e293b; }
-        .tabs-header { display: flex; gap: 8px; margin-bottom: -1px; overflow-x: auto; }
-        .tab-btn { padding: 16px 28px; background: #f1f5f9; border: 1px solid #cbd5e1; border-bottom: none; cursor: pointer; border-radius: 10px 10px 0 0; font-weight: 600; color: #64748b; transition: 0.2s; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-        .tab-btn:hover { background: #e2e8f0; color: #334155; }
-        .tab-btn.active { background: #fff; color: #0ea5e9; border-top: 3px solid #0ea5e9; padding-top: 15px; }
-        .tab-content { background: #fff; border: 1px solid #cbd5e1; padding: 40px; border-radius: 0 12px 12px 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        .inv-panel-tab { display: none; animation: fadeIn 0.3s; }
-        .inv-panel-tab.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        
-        /* Mensajes de Sistema */
-        .inv-msj-ok { background: #ecfdf5; border-left: 4px solid #10b981; color: #065f46; padding: 16px 20px; border-radius: 6px; margin-bottom: 25px; font-weight: 500; display: flex; align-items: center; gap: 10px;}
-        .inv-msj-warn { background: #fffbeb; border-left: 4px solid #f59e0b; color: #92400e; padding: 16px 20px; border-radius: 6px; margin-bottom: 25px; font-weight: 500;}
-
-        /* Tarjetas de Formularios Profesionales */
-        .front-admin-card { background: #fff; border-radius: 12px; padding: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03); margin-bottom: 40px; border: 1px solid #e2e8f0; }
-        .front-admin-card h2 { margin-top: 0; font-size: 19px; color: #0f172a; border-bottom: 2px solid #f1f5f9; padding-bottom: 15px; margin-bottom: 25px; display: flex; align-items: center; gap: 10px; font-weight: 700;}
-        
-        /* Layout de Formularios */
-        .front-row { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
-        .front-col { flex: 1; min-width: 250px; display: flex; flex-direction: column; justify-content: flex-end;}
-        .front-label { display: block; font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 14px;}
-        
-        /* Inputs y Selects Estandarizados */
-        .front-input, .front-select { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 15px; background: #f8fafc; transition: all 0.2s; box-sizing: border-box; color: #1e293b; height: 48px; font-family: inherit;}
-        .front-input:focus, .front-select:focus { border-color: #0ea5e9; outline: none; background: #fff; box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15); }
-        
-        /* Input de Archivo Mejorado */
-        .front-file-input { padding: 9px; cursor: pointer; }
-        .front-file-input::file-selector-button { background: #e2e8f0; border: 1px solid #cbd5e1; padding: 6px 14px; border-radius: 6px; color: #334155; cursor: pointer; font-weight: 600; margin-right: 15px; transition: 0.2s; font-family: inherit;}
-        .front-file-input::file-selector-button:hover { background: #cbd5e1; }
-
-        /* Checkbox tipo Caja Moderna */
-        .front-checkbox-wrapper { display: flex; align-items: center; gap: 12px; padding: 0 16px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; height: 48px; box-sizing: border-box; transition: 0.2s;}
-        .front-checkbox-wrapper:hover { background: #f1f5f9; border-color: #94a3b8; }
-        .front-checkbox-wrapper input[type="checkbox"] { width: 18px; height: 18px; accent-color: #10b981; cursor: pointer; margin:0;}
-        .front-checkbox-wrapper span { font-weight: 600; color: #334155; font-size: 14px; user-select: none;}
-
-        /* Botones */
-        .front-btn { background: #0ea5e9; color: #fff; padding: 0 24px; height: 48px; font-size: 15px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; transition: all 0.2s; width: 100%; display: flex; justify-content: center; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); font-family: inherit;}
-        .front-btn:hover { background: #0284c7; transform: translateY(-1px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .front-btn-green { background: #10b981; }
-        .front-btn-green:hover { background: #059669; }
-        .front-btn-amber { background: #f59e0b; }
-        .front-btn-amber:hover { background: #d97706; }
-        .front-btn-red { background: #f43f5e; }
-        .front-btn-red:hover { background: #be123c; }
-
-        /* Tablas */
-        .front-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; margin-top: 10px; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0;}
-        .front-table th { background: #f8fafc; padding: 16px; text-align: left; border-bottom: 1px solid #e2e8f0; color: #475569; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;}
-        .front-table td { padding: 16px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; color: #1e293b;}
-        .front-table tr:last-child td { border-bottom: none; }
-        .front-table tr:hover td { background: #f8fafc; }
-        
-        /* Badges y Enlaces */
-        .front-badge { padding: 6px 12px; border-radius: 20px; font-weight: 600; font-size: 12px; display: inline-block;}
-        .badge-pend { background: #fef08a; color: #854d0e; }
-        .badge-firm { background: #d1fae5; color: #065f46; }
-        .badge-anul { background: #ffe4e6; color: #9f1239; }
-        .front-action-link { color: #dc2626; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 6px; transition: 0.2s; background: #fef2f2;}
-        .front-action-link:hover { background: #fecaca; }
-        .front-action-warn { color: #d97706; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 6px; transition: 0.2s; background: #fffbeb; margin-right: 8px;}
-        .front-action-warn:hover { background: #fde68a; }
-        .info-tag { margin-top:0; font-size:13px; color:#64748b; background: #f8fafc; padding: 8px 16px; border-radius: 6px; display: inline-block; border: 1px solid #e2e8f0; font-weight: 500;}
-    </style>
-
     <div class="tabs-container">
         <?php echo $mensaje; ?>
         <div class="tabs-header">
@@ -1250,7 +1281,11 @@ function invfacil_render_panel_full($modo = 'admin') {
                                 <label class="front-label">Jefe Responsable</label>
                                 <select name="jefe_id" required class="front-select">
                                     <option value="">-- Asignar Jefe --</option>
-                                    <?php foreach($jefes as $j) echo "<option value='{$j->ID}'>{$j->display_name}</option>"; ?>
+                                    <?php foreach($jefes as $j) {
+                                        $nombre_j = trim($j->first_name . ' ' . $j->last_name);
+                                        $nombre_j = !empty($nombre_j) ? $nombre_j : $j->display_name;
+                                        echo "<option value='{$j->ID}'>{$nombre_j}</option>";
+                                    } ?>
                                 </select>
                             </div>
                             <div class="front-col" style="flex: 1;">
@@ -1266,11 +1301,17 @@ function invfacil_render_panel_full($modo = 'admin') {
                     <tbody>
                         <?php foreach($puntos as $p): 
                             $j_info = get_userdata($p->jefe_id);
+                            
+                            $nombre_j_tabla = '<span style="color:#ef4444;">No asignado</span>';
+                            if ($j_info) {
+                                $nombre_j_tabla = trim($j_info->first_name . ' ' . $j_info->last_name);
+                                $nombre_j_tabla = !empty($nombre_j_tabla) ? $nombre_j_tabla : $j_info->display_name;
+                            }
                         ?>
                         <tr>
                             <td style="color:#64748b; font-weight:600;">#<?php echo $p->id; ?></td>
                             <td><strong><?php echo $p->nombre_punto; ?></strong></td>
-                            <td><?php echo $j_info ? $j_info->display_name : '<span style="color:#ef4444;">No asignado</span>'; ?></td>
+                            <td><?php echo $nombre_j_tabla; ?></td>
                             <td style="text-align:right;"><a href="?del_punto=<?php echo $p->id; ?>&admin_nonce=<?php echo wp_create_nonce('admin_action'); ?>" class="front-action-link" onclick="return confirm('¿Eliminar sede definitivamente?')">Eliminar</a></td>
                         </tr>
                         <?php endforeach; ?>
@@ -1282,12 +1323,29 @@ function invfacil_render_panel_full($modo = 'admin') {
             </div>
 
             <div id="tab-historico" class="inv-panel-tab">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
                     <h2 style="margin:0; color:#0f172a;">📂 Histórico de Inventarios (Últimos 100)</h2>
+                    
+                    <div style="display: flex; gap: 15px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #cbd5e1;">
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: bold; color: #475569; margin-bottom: 5px;">Sede:</label>
+                            <select id="filtro-sede-hist" onchange="filtrarHistorico()" style="padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1; width: 180px;">
+                                <option value="">Todas las Sedes</option>
+                                <?php foreach($puntos as $p) echo "<option value='" . esc_attr($p->nombre_punto) . "'>" . esc_html($p->nombre_punto) . "</option>"; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 13px; font-weight: bold; color: #475569; margin-bottom: 5px;">Fecha:</label>
+                            <input type="date" id="filtro-fecha-hist" onchange="filtrarHistorico()" style="padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                        </div>
+                        <div style="align-self: flex-end;">
+                            <button type="button" onclick="document.getElementById('filtro-sede-hist').value=''; document.getElementById('filtro-fecha-hist').value=''; filtrarHistorico();" style="padding: 9px 15px; background: #64748b; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Limpiar</button>
+                        </div>
+                    </div>
                 </div>
                 
                 <table class="front-table">
-                    <thead><tr><th>Fecha / Hora</th><th>Sede</th><th>Verificador</th><th>Estado</th><th>Documentos / Acciones</th></tr></thead>
+                    <thead><tr><th>Fecha / Hora (Local)</th><th>Sede</th><th>Verificador</th><th>Estado</th><th>Documentos / Acciones</th></tr></thead>
                     <tbody>
                         <?php foreach($historico as $h): 
                             $pto = $wpdb->get_row($wpdb->prepare("SELECT nombre_punto FROM $t_puntos WHERE id = %d", $h->punto_id));
@@ -1297,9 +1355,14 @@ function invfacil_render_panel_full($modo = 'admin') {
                             if($h->estado == 'pendiente') $estado_html = "<span class='front-badge badge-pend'>En Progreso (Intento $h->intento)</span>";
                             elseif($h->estado == 'enviado_azsign') $estado_html = "<span class='front-badge badge-firm'>Enviado y Firmado</span>";
                             elseif($h->estado == 'anulado') $estado_html = "<span class='front-badge badge-anul'>Anulado</span>";
+                            
+                            $fecha_pura = date('Y-m-d', strtotime($h->fecha_asignacion));
+                            $nombre_sede_pura = $pto ? $pto->nombre_punto : '';
                         ?>
-                        <tr>
-                            <td style="color:#475569;"><?php echo date('d/m/Y H:i', strtotime($h->fecha_asignacion)); ?></td>
+                        <tr class="fila-historico" data-sede="<?php echo esc_attr($nombre_sede_pura); ?>" data-fecha="<?php echo esc_attr($fecha_pura); ?>">
+                            <td class="fecha-pc-local" data-fechaserver="<?php echo esc_attr($h->fecha_asignacion); ?>" style="color:#475569; font-weight:500;">
+                                ⏳ Cargando hora...
+                            </td>
                             <td><strong><?php echo $pto ? $pto->nombre_punto : 'Sede Eliminada'; ?></strong></td>
                             <td><?php echo $v_user ? $v_user->display_name : 'Usuario Borrado'; ?></td>
                             <td><?php echo $estado_html; ?></td>
@@ -1369,6 +1432,309 @@ function invfacil_render_panel_full($modo = 'admin') {
         evt.currentTarget.classList.add("active");
     }
     </script>
+    
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+    <script>
+    jQuery(document).ready(function($) {
+        $('select[name="verificador_id"]').select2({ placeholder: "-- Buscar Verificador --", width: '100%' });
+        $('select[name="jefe_id"]').select2({ placeholder: "-- Buscar Jefe --", width: '100%' });
+        $('#filtro-sede-hist').select2({ placeholder: "-- Buscar Sede --", width: '100%' });
+    });
+
+    function filtrarHistorico() {
+        let sede = document.getElementById('filtro-sede-hist').value.toLowerCase();
+        let fecha = document.getElementById('filtro-fecha-hist').value;
+
+        document.querySelectorAll('.fila-historico').forEach(fila => {
+            let sedeFila = fila.getAttribute('data-sede').toLowerCase();
+            let fechaFila = fila.getAttribute('data-fecha');
+
+            let matchSede = (sede === "" || sedeFila.includes(sede));
+            let matchFecha = (fecha === "" || fechaFila === fecha);
+
+            if (matchSede && matchFecha) {
+                fila.style.display = "";
+            } else {
+                fila.style.display = "none";
+            }
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        document.querySelectorAll('.fecha-pc-local').forEach(el => {
+            let serverDateStr = el.getAttribute('data-fechaserver');
+            let d = new Date(serverDateStr.replace(' ', 'T'));
+            if (!isNaN(d)) {
+                el.innerText = d.toLocaleString(undefined, { 
+                    day: '2-digit', month: '2-digit', year: 'numeric', 
+                    hour: '2-digit', minute: '2-digit' 
+                });
+            } else {
+                el.innerText = serverDateStr; 
+            }
+        });
+    });
+    </script>
+    <?php
+    return ob_get_clean();
+}
+// ========================================================================
+// SHORTCODE 4 ACTUALIZADO: RECEPCIÓN CON DOBLE PAD OBLIGATORIO
+// ========================================================================
+add_shortcode( 'recepcion_pedidos', 'invfacil_shortcode_recepcion_pedidos' );
+
+function invfacil_shortcode_recepcion_pedidos() {
+    if ( ! is_user_logged_in() ) return '<div class="inv-msj-warn">Debe iniciar sesión.</div>';
+    
+    global $wpdb;
+    $usuario_actual = wp_get_current_user();
+    $t_rec = $wpdb->prefix . 'invfacil_recepciones';
+    $t_rec_it = $wpdb->prefix . 'invfacil_recepcion_items';
+    $mensaje = '';
+
+    if (isset($_POST['guardar_recepcion_final'])) {
+        $nume_erp = sanitize_text_field($_POST['nume_erp']);
+        $entregador_id = intval($_POST['entregador_id']);
+        $nombre_recibe = sanitize_text_field($_POST['nombre_recibe']);
+        $firma_e = $_POST['firma_entrega_b64'];
+        $firma_v = $_POST['firma_verifica_b64'];
+        
+        if(empty($firma_e) || strlen($firma_e) < 1000 || empty($firma_v) || strlen($firma_v) < 1000 || empty($nombre_recibe)) {
+            $mensaje = '<div class="inv-msj-warn">⚠️ Ambas firmas y el nombre de quien recibe son obligatorios. Asegúrese de completar todos los campos.</div>';
+        } else {
+            $wpdb->insert($t_rec, array(
+                'nume_erp' => $nume_erp,
+                'bodega_origen' => sanitize_text_field($_POST['bodega_origen']),
+                'bodega_destino' => sanitize_text_field($_POST['bodega_destino']),
+                'fecha_recepcion' => current_time('mysql'),
+                'receptor_id' => $usuario_actual->ID,
+                'entregador_id' => $entregador_id,
+                'nombre_recibe' => $nombre_recibe,
+                'firma_entrega' => $firma_e,
+                'firma_verifica' => $firma_v,
+                'estado_erp' => 'pendiente_erp'
+            ));
+            $recepcion_id = $wpdb->insert_id;
+
+            if (isset($_POST['items']) && is_array($_POST['items'])) {
+                foreach ($_POST['items'] as $item) {
+                    $entregada = floatval(str_replace(',', '.', $item['entregada']));
+                    if ($entregada > 0) {
+                        $wpdb->insert($t_rec_it, array(
+                            'recepcion_id' => $recepcion_id,
+                            'codigo' => sanitize_text_field($item['codigo']),
+                            'nombre' => sanitize_text_field($item['nombre']),
+                            'unidad' => sanitize_text_field($item['unidad']),
+                            'cant_entregada' => $entregada
+                        ));
+                    }
+                }
+            }
+            $url_pdf = esc_url(add_query_arg('descargar_pdf_recepcion', $recepcion_id, site_url()));
+            return "<div class='inv-facil-form'><div class='inv-msj-ok'>✅ Recepción guardada y validada con doble firma correctamente.</div><br><a href='$url_pdf' target='_blank' class='front-btn front-btn-green'>📄 Descargar Acta en PDF</a></div>";
+        }
+    }
+
+    $usuarios = get_users(); // Trae a todos sin importar el rol (Bug 2)
+
+    ob_start();
+    ?>
+    <div class="inv-facil-form">
+        <h2>📥 Recepción de Traslado (Validación)</h2>
+        <?php echo $mensaje; ?>
+
+        <?php if (!isset($_POST['procesar_xml']) && !isset($_POST['guardar_recepcion_final'])): ?>
+            <div class="inv-seccion">
+                <h3>1. Cargar Documento e Identificar Entrega</h3>
+                <p>El administrador sube el XML y selecciona quién hace la entrega física.</p>
+                <form method="post" enctype="multipart/form-data">
+                    <label class="front-label">Funcionario que Entrega:</label>
+                    <select name="entregador_id" required class="front-select" style="margin-bottom: 15px;">
+                        <option value="">-- Seleccionar Funcionario --</option>
+                        <?php foreach($usuarios as $u) {
+                            $n = trim($u->first_name . ' ' . $u->last_name);
+                            $n = !empty($n) ? $n : $u->display_name;
+                            echo "<option value='{$u->ID}'>{$n}</option>";
+                        } ?>
+                    </select>
+
+                    <label class="front-label">Archivo XML (Descargado del ERP):</label>
+                    <input type="file" name="xml_pedido" accept=".xml" required class="front-input front-file-input" style="background:#fff;">
+                    
+                    <button type="submit" name="procesar_xml" class="front-btn front-btn-amber" style="margin-top:20px;">🔍 Leer Documento y Continuar</button>
+                </form>
+            </div>
+        <?php 
+        elseif (isset($_POST['procesar_xml']) && !empty($_FILES['xml_pedido']['tmp_name'])): 
+            $xml_content = file_get_contents($_FILES['xml_pedido']['tmp_name']);
+            
+            preg_match('/<Field Name="SOLNUSO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_nume);
+            $nume_erp = isset($m_nume[1]) ? intval($m_nume[1]) : 0;
+            
+            preg_match('/<Field Name="BODNOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_ori);
+            $bodega_origen = isset($m_ori[1]) ? sanitize_text_field($m_ori[1]) : 'Desconocida';
+            
+            preg_match('/<Field Name="BODNOMB2"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_des);
+            $bodega_destino = isset($m_des[1]) ? sanitize_text_field($m_des[1]) : 'Desconocida';
+
+            if ($nume_erp == 0) {
+                echo "<div class='inv-msj-warn'>No se detectó el 'Número' en el XML.</div>";
+            } else {
+                preg_match_all('/<Details Level="2">(.*?)<\/Details>/s', $xml_content, $matches_details);
+                $productos_xml = [];
+                foreach($matches_details[1] as $detail) {
+                    preg_match('/<Field Name="PROCODI1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cod);
+                    preg_match('/<Field Name="PRONOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_nom);
+                    preg_match('/<Field Name="UNIINIC1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_uni);
+                    preg_match('/<Field Name="DSOCASO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cant);
+
+                    if(!empty($m_cod[1])) {
+                        $productos_xml[] = [
+                            'codigo' => trim($m_cod[1]),
+                            'nombre' => trim($m_nom[1]),
+                            'unidad' => trim($m_uni[1]),
+                            'solicitada' => floatval(trim($m_cant[1]))
+                        ];
+                    }
+                }
+                ?>
+                <form method="post" id="formRecepcion" onsubmit="return validarAmbasFirmas(event);">
+                    <input type="hidden" name="nume_erp" value="<?php echo esc_attr($nume_erp); ?>">
+                    <input type="hidden" name="bodega_origen" value="<?php echo esc_attr($bodega_origen); ?>">
+                    <input type="hidden" name="bodega_destino" value="<?php echo esc_attr($bodega_destino); ?>">
+                    <input type="hidden" name="entregador_id" value="<?php echo esc_attr($_POST['entregador_id']); ?>">
+                    <input type="hidden" name="firma_entrega_b64" id="firma_entrega_b64">
+                    <input type="hidden" name="firma_verifica_b64" id="firma_verifica_b64">
+
+                    <div style="background:#e0f2fe; padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid #bae6fd;">
+                        <h3 style="margin-top:0; color:#0369a1;">Recepción Traslado ERP: <?php echo $nume_erp; ?></h3>
+                        <p style="margin:0;"><strong>De:</strong> <?php echo $bodega_origen; ?><br><strong>Para:</strong> <?php echo $bodega_destino; ?></p>
+                    </div>
+
+                    <table class="front-table" style="margin-bottom: 30px;">
+                        <thead><tr><th>Producto</th><th>Pendiente</th><th>Cant. Real Recibida</th></tr></thead>
+                        <tbody>
+                        <?php 
+                        $hay_pendientes = false;
+                        $index = 0;
+                        foreach ($productos_xml as $px): 
+                            $entregado_antes = $wpdb->get_var($wpdb->prepare(
+                                "SELECT SUM(cant_entregada) FROM $t_rec_it it INNER JOIN $t_rec r ON it.recepcion_id = r.id WHERE r.nume_erp = %s AND it.codigo = %s",
+                                $nume_erp, $px['codigo']
+                            ));
+                            $pendiente = $px['solicitada'] - floatval($entregado_antes);
+                            
+                            if ($pendiente > 0): 
+                                $hay_pendientes = true;
+                        ?>
+                            <tr>
+                                <td>
+                                    <strong><?php echo esc_html($px['nombre']); ?></strong><br>
+                                    <small style="color:#64748b;"><?php echo esc_html($px['codigo']); ?> | <?php echo esc_html($px['unidad']); ?></small>
+                                    <input type="hidden" name="items[<?php echo $index; ?>][codigo]" value="<?php echo esc_attr($px['codigo']); ?>">
+                                    <input type="hidden" name="items[<?php echo $index; ?>][nombre]" value="<?php echo esc_attr($px['nombre']); ?>">
+                                    <input type="hidden" name="items[<?php echo $index; ?>][unidad]" value="<?php echo esc_attr($px['unidad']); ?>">
+                                </td>
+                                <td style="color:#d63638; font-weight:bold; font-size:16px; text-align:center;"><?php echo $pendiente; ?></td>
+                                <td>
+                                    <input type="number" step="0.01" min="0" max="<?php echo $pendiente; ?>" name="items[<?php echo $index; ?>][entregada]" class="front-input" value="<?php echo $pendiente; ?>" required>
+                                </td>
+                            </tr>
+                        <?php 
+                            $index++;
+                            endif; 
+                        endforeach; 
+                        ?>
+                        </tbody>
+                    </table>
+
+                    <?php if(!$hay_pendientes): ?>
+                        <div class="inv-msj-ok">✅ El total de este traslado ya fue recibido en actas anteriores. No hay saldos pendientes.</div>
+                        <a href="" class="front-btn">Volver</a>
+                    <?php else: ?>
+                        <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 25px;">
+                            <div class="inv-seccion" style="flex: 1; min-width: 280px; text-align: center; border:2px solid #cbd5e1; background:#f8fafc; border-radius:8px;">
+                                <h3 style="color:#1e293b; margin-top:0;">✍️ Firma: Quien Entrega</h3>
+                                <canvas id="padEntrega" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%;"></canvas>
+                                <br><button type="button" onclick="clearPadE()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
+                            </div>
+
+                            <div class="inv-seccion" style="flex: 1; min-width: 280px; text-align: center; border:2px solid #cbd5e1; background:#f8fafc; border-radius:8px;">
+                                <h3 style="color:#1e293b; margin-top:0;">✍️ Firma: Quien Recibe</h3>
+                                <label style="display:block; text-align:left; font-size:14px; font-weight:bold; margin-bottom:5px;">Nombre de quien recibe:</label>
+                                <input type="text" name="nombre_recibe" required class="front-input" placeholder="Nombre completo" style="margin-bottom: 10px;">
+                                
+                                <canvas id="padVerifica" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%;"></canvas>
+                                <br><button type="button" onclick="clearPadV()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
+                            </div>
+                        </div>
+                        <button type="submit" name="guardar_recepcion_final" class="front-btn front-btn-green" style="font-size:18px;">✅ Validar Doble Firma y Guardar</button>
+                    <?php endif; ?>
+                </form>
+
+                <script>
+                    const canvasE = document.getElementById('padEntrega');
+                    let drawnPixelsE = 0;
+                    if (canvasE) {
+                        const ctxE = canvasE.getContext('2d');
+                        let drawingE = false;
+                        function getPosE(e) { const r = canvasE.getBoundingClientRect(); const cx = e.clientX || (e.touches && e.touches[0].clientX); const cy = e.clientY || (e.touches && e.touches[0].clientY); return { x: cx - r.left, y: cy - r.top }; }
+                        canvasE.addEventListener('mousedown', (e) => { drawingE = true; drawE(e); });
+                        canvasE.addEventListener('mouseup', () => { drawingE = false; ctxE.beginPath(); });
+                        canvasE.addEventListener('mousemove', drawE);
+                        canvasE.addEventListener('touchstart', (e) => { drawingE = true; drawE(e); }, {passive: false});
+                        canvasE.addEventListener('touchend', () => { drawingE = false; ctxE.beginPath(); });
+                        canvasE.addEventListener('touchmove', drawE, {passive: false});
+
+                        function drawE(e) {
+                            if (!drawingE) return; e.preventDefault(); const p = getPosE(e);
+                            ctxE.lineWidth = 3; ctxE.lineCap = 'round'; ctxE.strokeStyle = '#1e293b';
+                            ctxE.lineTo(p.x, p.y); ctxE.stroke(); ctxE.beginPath(); ctxE.moveTo(p.x, p.y);
+                            drawnPixelsE++;
+                        }
+                        window.clearPadE = function() { ctxE.clearRect(0, 0, canvasE.width, canvasE.height); drawnPixelsE = 0; }
+                    }
+
+                    const canvasV = document.getElementById('padVerifica');
+                    let drawnPixelsV = 0;
+                    if (canvasV) {
+                        const ctxV = canvasV.getContext('2d');
+                        let drawingV = false;
+                        function getPosV(e) { const r = canvasV.getBoundingClientRect(); const cx = e.clientX || (e.touches && e.touches[0].clientX); const cy = e.clientY || (e.touches && e.touches[0].clientY); return { x: cx - r.left, y: cy - r.top }; }
+                        canvasV.addEventListener('mousedown', (e) => { drawingV = true; drawV(e); });
+                        canvasV.addEventListener('mouseup', () => { drawingV = false; ctxV.beginPath(); });
+                        canvasV.addEventListener('mousemove', drawV);
+                        canvasV.addEventListener('touchstart', (e) => { drawingV = true; drawV(e); }, {passive: false});
+                        canvasV.addEventListener('touchmove', drawV, {passive: false});
+
+                        function drawV(e) {
+                            if (!drawingV) return; e.preventDefault(); const p = getPosV(e);
+                            ctxV.lineWidth = 3; ctxV.lineCap = 'round'; ctxV.strokeStyle = '#1e293b';
+                            ctxV.lineTo(p.x, p.y); ctxV.stroke(); ctxV.beginPath(); ctxV.moveTo(p.x, p.y);
+                            drawnPixelsV++;
+                        }
+                        window.clearPadV = function() { ctxV.clearRect(0, 0, canvasV.width, canvasV.height); drawnPixelsV = 0; }
+                    }
+
+                    // Validación de firmas obligatorias
+                    window.validarAmbasFirmas = function(e) {
+                        if (drawnPixelsE < 35 || drawnPixelsV < 35) {
+                            e.preventDefault();
+                            alert("⚠️ OPERACIÓN DENEGADA: Ambas firmas son obligatorias. Tanto la persona que entrega como la que recibe deben firmar en su recuadro.");
+                            return false;
+                        }
+                        document.getElementById('firma_entrega_b64').value = canvasE.toDataURL('image/png');
+                        document.getElementById('firma_verifica_b64').value = canvasV.toDataURL('image/png');
+                        return true;
+                    }
+                </script>
+                <?php
+            }
+        endif; ?>
+    </div>
     <?php
     return ob_get_clean();
 }
