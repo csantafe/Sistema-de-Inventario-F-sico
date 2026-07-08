@@ -142,7 +142,7 @@ function invfacil_pantalla_admin() {
 
     // Consultas para la Vista
     $puntos = $wpdb->get_results("SELECT * FROM $tabla_puntos ORDER BY nombre_punto ASC");
-    $verificadores = get_users(array('role' => 'invfacil_verificador'));
+    $verificadores = get_users(array());
     $jefes = get_users(array('role' => 'invfacil_jefe'));
     $conteos = $wpdb->get_results("SELECT * FROM $tabla_conteos ORDER BY fecha_asignacion DESC");
     $total_maestra = $wpdb->get_var("SELECT COUNT(*) FROM $tabla_prod_erp");
