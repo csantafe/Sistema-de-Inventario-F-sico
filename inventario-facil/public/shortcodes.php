@@ -1482,7 +1482,7 @@ function invfacil_render_panel_full($modo = 'admin') {
     return ob_get_clean();
 }
 // ========================================================================
-// SHORTCODE 4 ACTUALIZADO: RECEPCIÓN CON DOBLE PAD OBLIGATORIO
+// SHORTCODE 4 ACTUALIZADO: BÚSQUEDA Y RECEPCIÓN DE PEDIDOS XML
 // ========================================================================
 add_shortcode( 'recepcion_pedidos', 'invfacil_shortcode_recepcion_pedidos' );
 
@@ -1491,10 +1491,58 @@ function invfacil_shortcode_recepcion_pedidos() {
     
     global $wpdb;
     $usuario_actual = wp_get_current_user();
-    $t_rec = $wpdb->prefix . 'invfacil_recepciones';
-    $t_rec_it = $wpdb->prefix . 'invfacil_recepcion_items';
+    $t_xml_ped = $wpdb->prefix . 'invfacil_xml_pedidos';
+    $t_xml_it  = $wpdb->prefix . 'invfacil_xml_items';
+    $t_rec     = $wpdb->prefix . 'invfacil_recepciones';
+    $t_rec_it  = $wpdb->prefix . 'invfacil_recepcion_items';
     $mensaje = '';
 
+    // ACCIÓN 1: CARGAR EL XML A LA BASE DE DATOS
+    if (isset($_POST['cargar_xml_bd']) && !empty($_FILES['xml_pedido']['tmp_name'])) {
+        $xml_content = file_get_contents($_FILES['xml_pedido']['tmp_name']);
+        
+        preg_match('/<Field Name="SOLNUSO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_nume);
+        $nume_erp = isset($m_nume[1]) ? intval($m_nume[1]) : 0;
+        
+        if ($nume_erp > 0) {
+            $existe = $wpdb->get_var($wpdb->prepare("SELECT nume_erp FROM $t_xml_ped WHERE nume_erp = %s", $nume_erp));
+            if (!$existe) {
+                preg_match('/<Field Name="BODNOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_ori);
+                preg_match('/<Field Name="BODNOMB2"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_des);
+                
+                $wpdb->insert($t_xml_ped, array(
+                    'nume_erp' => $nume_erp,
+                    'bodega_origen' => isset($m_ori[1]) ? sanitize_text_field($m_ori[1]) : 'Desconocida',
+                    'bodega_destino' => isset($m_des[1]) ? sanitize_text_field($m_des[1]) : 'Desconocida'
+                ));
+                
+                preg_match_all('/<Details Level="2">(.*?)<\/Details>/s', $xml_content, $matches_details);
+                foreach($matches_details[1] as $detail) {
+                    preg_match('/<Field Name="PROCODI1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cod);
+                    preg_match('/<Field Name="PRONOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_nom);
+                    preg_match('/<Field Name="UNIINIC1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_uni);
+                    preg_match('/<Field Name="DSOCASO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cant);
+
+                    if(!empty($m_cod[1])) {
+                        $wpdb->insert($t_xml_it, array(
+                            'nume_erp' => $nume_erp,
+                            'codigo' => trim($m_cod[1]),
+                            'nombre' => trim($m_nom[1]),
+                            'unidad' => trim($m_uni[1]),
+                            'cant_solicitada' => floatval(trim($m_cant[1]))
+                        ));
+                    }
+                }
+                $mensaje = "<div class='inv-msj-ok'>✅ Documento XML (#$nume_erp) cargado en la base de datos con éxito. Ya puede buscarlo.</div>";
+            } else {
+                $mensaje = "<div class='inv-msj-warn'>⚠️ El documento XML (#$nume_erp) ya había sido cargado previamente. Búsquelo en la barra inferior.</div>";
+            }
+        } else {
+             $mensaje = "<div class='inv-msj-warn'>⚠️ Archivo inválido. No se detectó un Número ERP válido.</div>";
+        }
+    }
+
+    // ACCIÓN 2: GUARDAR LA RECEPCIÓN FINAL CON FIRMAS
     if (isset($_POST['guardar_recepcion_final'])) {
         $nume_erp = sanitize_text_field($_POST['nume_erp']);
         $entregador_id = intval($_POST['entregador_id']);
@@ -1538,80 +1586,64 @@ function invfacil_shortcode_recepcion_pedidos() {
         }
     }
 
-    $usuarios = get_users(); // Trae a todos sin importar el rol (Bug 2)
+    $usuarios = get_users(); 
 
     ob_start();
     ?>
     <div class="inv-facil-form">
-        <h2>📥 Recepción de Traslado (Validación)</h2>
+        <h2 style="font-size: 28px; color: #135e96; text-align: center; border-bottom: 3px solid #135e96; padding-bottom: 10px; margin-bottom: 20px;">📦 Gestión de Recepciones ERP</h2>
         <?php echo $mensaje; ?>
 
-        <?php if (!isset($_POST['procesar_xml']) && !isset($_POST['guardar_recepcion_final'])): ?>
-            <div class="inv-seccion">
-                <h3>1. Cargar Documento e Identificar Entrega</h3>
-                <p>El administrador sube el XML y selecciona quién hace la entrega física.</p>
-                <form method="post" enctype="multipart/form-data">
-                    <label class="front-label">Funcionario que Entrega:</label>
-                    <select name="entregador_id" required class="front-select" style="margin-bottom: 15px;">
-                        <option value="">-- Seleccionar Funcionario --</option>
-                        <?php foreach($usuarios as $u) {
-                            $n = trim($u->first_name . ' ' . $u->last_name);
-                            $n = !empty($n) ? $n : $u->display_name;
-                            echo "<option value='{$u->ID}'>{$n}</option>";
-                        } ?>
-                    </select>
-
-                    <label class="front-label">Archivo XML (Descargado del ERP):</label>
-                    <input type="file" name="xml_pedido" accept=".xml" required class="front-input front-file-input" style="background:#fff;">
-                    
-                    <button type="submit" name="procesar_xml" class="front-btn front-btn-amber" style="margin-top:20px;">🔍 Leer Documento y Continuar</button>
+        <?php if (!isset($_POST['buscar_pedido']) && !isset($_POST['guardar_recepcion_final'])): ?>
+            
+            <div class="inv-seccion" style="background:#f8fafc; border-left:4px solid #10b981;">
+                <h3 style="color:#065f46; margin-top:0;">📁 1. Cargar Nuevo Documento XML al Sistema</h3>
+                <p style="font-size:14px; color:#475569;">Cargue el XML para que el pedido quede disponible en la base de datos.</p>
+                <form method="post" enctype="multipart/form-data" style="display:flex; gap: 15px; align-items:center; flex-wrap:wrap;">
+                    <input type="file" name="xml_pedido" accept=".xml" required class="front-input front-file-input" style="flex:2; min-width:200px;">
+                    <button type="submit" name="cargar_xml_bd" class="front-btn front-btn-green" style="flex:1; min-width:150px;">Subir y Guardar</button>
                 </form>
             </div>
+
+            <div class="inv-seccion" style="background:#f8fafc; border-left:4px solid #0ea5e9; margin-top:30px;">
+                <h3 style="color:#0369a1; margin-top:0;">🔍 2. Buscar y Realizar Recepción Física</h3>
+                <p style="font-size:14px; color:#475569;">Ingrese el número de la solicitud para reportar una entrega total o parcial.</p>
+                <form method="post" style="display:flex; gap: 15px; align-items:center; flex-wrap:wrap;">
+                    <input type="text" name="nume_busqueda" placeholder="Ej: 2647" required class="front-input" style="flex:2; min-width:200px; font-size:18px; font-weight:bold;">
+                    <button type="submit" name="buscar_pedido" class="front-btn front-btn-amber" style="flex:1; min-width:150px;">Buscar Pedido</button>
+                </form>
+            </div>
+
         <?php 
-        elseif (isset($_POST['procesar_xml']) && !empty($_FILES['xml_pedido']['tmp_name'])): 
-            $xml_content = file_get_contents($_FILES['xml_pedido']['tmp_name']);
-            
-            preg_match('/<Field Name="SOLNUSO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_nume);
-            $nume_erp = isset($m_nume[1]) ? intval($m_nume[1]) : 0;
-            
-            preg_match('/<Field Name="BODNOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_ori);
-            $bodega_origen = isset($m_ori[1]) ? sanitize_text_field($m_ori[1]) : 'Desconocida';
-            
-            preg_match('/<Field Name="BODNOMB2"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $xml_content, $m_des);
-            $bodega_destino = isset($m_des[1]) ? sanitize_text_field($m_des[1]) : 'Desconocida';
+        elseif (isset($_POST['buscar_pedido'])): 
+            $nume_buscado = sanitize_text_field($_POST['nume_busqueda']);
+            $pedido_bd = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t_xml_ped WHERE nume_erp = %s", $nume_buscado));
 
-            if ($nume_erp == 0) {
-                echo "<div class='inv-msj-warn'>No se detectó el 'Número' en el XML.</div>";
+            if (!$pedido_bd) {
+                echo "<div class='inv-msj-warn'>⚠️ No se encontró el pedido #{$nume_buscado} en el sistema. Asegúrese de que se haya cargado el archivo XML previamente.</div><a href='' class='front-btn'>Volver</a>";
             } else {
-                preg_match_all('/<Details Level="2">(.*?)<\/Details>/s', $xml_content, $matches_details);
-                $productos_xml = [];
-                foreach($matches_details[1] as $detail) {
-                    preg_match('/<Field Name="PROCODI1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cod);
-                    preg_match('/<Field Name="PRONOMB1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_nom);
-                    preg_match('/<Field Name="UNIINIC1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_uni);
-                    preg_match('/<Field Name="DSOCASO1"[^>]*>.*?<Value>([^<]+)<\/Value>/s', $detail, $m_cant);
-
-                    if(!empty($m_cod[1])) {
-                        $productos_xml[] = [
-                            'codigo' => trim($m_cod[1]),
-                            'nombre' => trim($m_nom[1]),
-                            'unidad' => trim($m_uni[1]),
-                            'solicitada' => floatval(trim($m_cant[1]))
-                        ];
-                    }
-                }
+                $productos_xml = $wpdb->get_results($wpdb->prepare("SELECT * FROM $t_xml_it WHERE nume_erp = %s", $nume_buscado));
                 ?>
                 <form method="post" id="formRecepcion" onsubmit="return validarAmbasFirmas(event);">
-                    <input type="hidden" name="nume_erp" value="<?php echo esc_attr($nume_erp); ?>">
-                    <input type="hidden" name="bodega_origen" value="<?php echo esc_attr($bodega_origen); ?>">
-                    <input type="hidden" name="bodega_destino" value="<?php echo esc_attr($bodega_destino); ?>">
-                    <input type="hidden" name="entregador_id" value="<?php echo esc_attr($_POST['entregador_id']); ?>">
+                    <input type="hidden" name="nume_erp" value="<?php echo esc_attr($nume_buscado); ?>">
+                    <input type="hidden" name="bodega_origen" value="<?php echo esc_attr($pedido_bd->bodega_origen); ?>">
+                    <input type="hidden" name="bodega_destino" value="<?php echo esc_attr($pedido_bd->bodega_destino); ?>">
                     <input type="hidden" name="firma_entrega_b64" id="firma_entrega_b64">
                     <input type="hidden" name="firma_verifica_b64" id="firma_verifica_b64">
 
                     <div style="background:#e0f2fe; padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid #bae6fd;">
-                        <h3 style="margin-top:0; color:#0369a1;">Recepción Traslado ERP: <?php echo $nume_erp; ?></h3>
-                        <p style="margin:0;"><strong>De:</strong> <?php echo $bodega_origen; ?><br><strong>Para:</strong> <?php echo $bodega_destino; ?></p>
+                        <h3 style="margin-top:0; color:#0369a1;">Recepción Pedido ERP: #<?php echo $nume_buscado; ?></h3>
+                        <p style="margin:0;"><strong>De:</strong> <?php echo esc_html($pedido_bd->bodega_origen); ?><br><strong>Para:</strong> <?php echo esc_html($pedido_bd->bodega_destino); ?></p>
+                        
+                        <label class="front-label" style="margin-top:15px;">Funcionario que realiza la entrega:</label>
+                        <select name="entregador_id" required class="front-select">
+                            <option value="">-- Seleccionar Funcionario --</option>
+                            <?php foreach($usuarios as $u) {
+                                $n = trim($u->first_name . ' ' . $u->last_name);
+                                $n = !empty($n) ? $n : $u->display_name;
+                                echo "<option value='{$u->ID}'>{$n}</option>";
+                            } ?>
+                        </select>
                     </div>
 
                     <table class="front-table" style="margin-bottom: 30px;">
@@ -1623,20 +1655,20 @@ function invfacil_shortcode_recepcion_pedidos() {
                         foreach ($productos_xml as $px): 
                             $entregado_antes = $wpdb->get_var($wpdb->prepare(
                                 "SELECT SUM(cant_entregada) FROM $t_rec_it it INNER JOIN $t_rec r ON it.recepcion_id = r.id WHERE r.nume_erp = %s AND it.codigo = %s",
-                                $nume_erp, $px['codigo']
+                                $nume_buscado, $px->codigo
                             ));
-                            $pendiente = $px['solicitada'] - floatval($entregado_antes);
+                            $pendiente = floatval($px->cant_solicitada) - floatval($entregado_antes);
                             
                             if ($pendiente > 0): 
                                 $hay_pendientes = true;
                         ?>
                             <tr>
                                 <td>
-                                    <strong><?php echo esc_html($px['nombre']); ?></strong><br>
-                                    <small style="color:#64748b;"><?php echo esc_html($px['codigo']); ?> | <?php echo esc_html($px['unidad']); ?></small>
-                                    <input type="hidden" name="items[<?php echo $index; ?>][codigo]" value="<?php echo esc_attr($px['codigo']); ?>">
-                                    <input type="hidden" name="items[<?php echo $index; ?>][nombre]" value="<?php echo esc_attr($px['nombre']); ?>">
-                                    <input type="hidden" name="items[<?php echo $index; ?>][unidad]" value="<?php echo esc_attr($px['unidad']); ?>">
+                                    <strong><?php echo esc_html($px->nombre); ?></strong><br>
+                                    <small style="color:#64748b;"><?php echo esc_html($px->codigo); ?> | <?php echo esc_html($px->unidad); ?></small>
+                                    <input type="hidden" name="items[<?php echo $index; ?>][codigo]" value="<?php echo esc_attr($px->codigo); ?>">
+                                    <input type="hidden" name="items[<?php echo $index; ?>][nombre]" value="<?php echo esc_attr($px->nombre); ?>">
+                                    <input type="hidden" name="items[<?php echo $index; ?>][unidad]" value="<?php echo esc_attr($px->unidad); ?>">
                                 </td>
                                 <td style="color:#d63638; font-weight:bold; font-size:16px; text-align:center;"><?php echo $pendiente; ?></td>
                                 <td>
@@ -1653,12 +1685,12 @@ function invfacil_shortcode_recepcion_pedidos() {
 
                     <?php if(!$hay_pendientes): ?>
                         <div class="inv-msj-ok">✅ El total de este traslado ya fue recibido en actas anteriores. No hay saldos pendientes.</div>
-                        <a href="" class="front-btn">Volver</a>
+                        <a href="" class="front-btn">Volver al Buscador</a>
                     <?php else: ?>
                         <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 25px;">
                             <div class="inv-seccion" style="flex: 1; min-width: 280px; text-align: center; border:2px solid #cbd5e1; background:#f8fafc; border-radius:8px;">
                                 <h3 style="color:#1e293b; margin-top:0;">✍️ Firma: Quien Entrega</h3>
-                                <canvas id="padEntrega" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%;"></canvas>
+                                <canvas id="padEntrega" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%; width:100%;"></canvas>
                                 <br><button type="button" onclick="clearPadE()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
                             </div>
 
@@ -1667,7 +1699,7 @@ function invfacil_shortcode_recepcion_pedidos() {
                                 <label style="display:block; text-align:left; font-size:14px; font-weight:bold; margin-bottom:5px;">Nombre de quien recibe:</label>
                                 <input type="text" name="nombre_recibe" required class="front-input" placeholder="Nombre completo" style="margin-bottom: 10px;">
                                 
-                                <canvas id="padVerifica" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%;"></canvas>
+                                <canvas id="padVerifica" width="400" height="150" style="border: 2px dashed #94a3b8; background: #fff; border-radius: 8px; cursor: crosshair; touch-action: none; max-width:100%; width:100%;"></canvas>
                                 <br><button type="button" onclick="clearPadV()" style="margin-top:10px; padding:6px 15px; background:#cbd5e1; border:none; border-radius:4px; cursor:pointer;">🧹 Limpiar</button>
                             </div>
                         </div>
@@ -1719,7 +1751,6 @@ function invfacil_shortcode_recepcion_pedidos() {
                         window.clearPadV = function() { ctxV.clearRect(0, 0, canvasV.width, canvasV.height); drawnPixelsV = 0; }
                     }
 
-                    // Validación de firmas obligatorias
                     window.validarAmbasFirmas = function(e) {
                         if (drawnPixelsE < 35 || drawnPixelsV < 35) {
                             e.preventDefault();
@@ -1737,4 +1768,68 @@ function invfacil_shortcode_recepcion_pedidos() {
     </div>
     <?php
     return ob_get_clean();
+}
+
+// ========================================================================
+// FRONTEND: HISTÓRICO DE TRASLADOS [mis_traslados]
+// ========================================================================
+add_shortcode( 'mis_traslados', 'invfacil_shortcode_mis_traslados' );
+
+function invfacil_shortcode_mis_traslados() {
+    if ( ! is_user_logged_in() ) return '<p style="text-align:center;">Debe iniciar sesión.</p>';
+    global $wpdb;
+    $usuario = wp_get_current_user();
+    $tabla = $wpdb->prefix . 'invfacil_traslados';
+    $hist = $wpdb->get_results($wpdb->prepare("SELECT * FROM $tabla WHERE elaborador_id = %d ORDER BY fecha_traslado DESC", $usuario->ID));
+
+    ob_start();
+    ?>
+    <div class="inv-hist-wrap">
+        <h2>Mis Traslados Creados</h2>
+        <?php if($hist): foreach($hist as $h): ?>
+            <div class="inv-tarjeta">
+                <div class="inv-tarjeta-info">
+                    <h3>ID: #TR-<?php echo $h->id; ?></h3>
+                    <p><strong>De:</strong> <?php echo esc_html($h->bodega_origen_nombre); ?> <strong>Para:</strong> <?php echo esc_html($h->bodega_destino_nombre); ?></p>
+                    <p><strong>Fecha:</strong> <?php echo date('d/m/Y', strtotime($h->fecha_traslado)); ?></p>
+                </div>
+                <div><a href="<?php echo esc_url(add_query_arg('descargar_pdf_traslado', $h->id, site_url())); ?>" class="inv-btn-descarga" target="_blank">📄 Descargar PDF</a></div>
+            </div>
+        <?php endforeach; else: ?>
+            <div style="font-size: 18px; text-align:center; padding: 30px; border: 2px dashed #ccc; border-radius: 10px;">No ha creado traslados todavía.</div>
+        <?php endif; ?>
+    </div>
+    <?php return ob_get_clean();
+}
+
+// ========================================================================
+// FRONTEND: HISTÓRICO DE RECEPCIONES [mis_recepciones]
+// ========================================================================
+add_shortcode( 'mis_recepciones', 'invfacil_shortcode_mis_recepciones' );
+
+function invfacil_shortcode_mis_recepciones() {
+    if ( ! is_user_logged_in() ) return '<p style="text-align:center;">Debe iniciar sesión.</p>';
+    global $wpdb;
+    $usuario = wp_get_current_user();
+    $tabla = $wpdb->prefix . 'invfacil_recepciones';
+    $hist = $wpdb->get_results($wpdb->prepare("SELECT * FROM $tabla WHERE receptor_id = %d OR entregador_id = %d ORDER BY fecha_recepcion DESC", $usuario->ID, $usuario->ID));
+
+    ob_start();
+    ?>
+    <div class="inv-hist-wrap">
+        <h2>Mis Recepciones (Faltantes)</h2>
+        <?php if($hist): foreach($hist as $h): ?>
+            <div class="inv-tarjeta">
+                <div class="inv-tarjeta-info">
+                    <h3>Núme ERP: <?php echo $h->nume_erp; ?></h3>
+                    <p><strong>De:</strong> <?php echo esc_html($h->bodega_origen); ?> <strong>Para:</strong> <?php echo esc_html($h->bodega_destino); ?></p>
+                    <p><strong>Fecha:</strong> <?php echo date('d/m/Y', strtotime($h->fecha_recepcion)); ?></p>
+                </div>
+                <div><a href="<?php echo esc_url(add_query_arg('descargar_pdf_recepcion', $h->id, site_url())); ?>" class="inv-btn-descarga" target="_blank">📄 Descargar PDF</a></div>
+            </div>
+        <?php endforeach; else: ?>
+            <div style="font-size: 18px; text-align:center; padding: 30px; border: 2px dashed #ccc; border-radius: 10px;">No ha firmado recepciones todavía.</div>
+        <?php endif; ?>
+    </div>
+    <?php return ob_get_clean();
 }
