@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Inventario y Traslados Fácil
  * Description: Control de inventarios y traslados con integración AZSign y Bitácora de Auditoría.
- * Version: 6.5
+ * Version: 6.6
  * Author: Carlos Santafe
  */
 
@@ -216,6 +216,31 @@ function invfacil_activar_plugin() {
       PRIMARY KEY  (id)
     ) $charset_collate;";
     dbDelta( $sql10 );
+    // ========================================================================
+    // NUEVAS TABLAS PARA ALMACENAMIENTO DE XML Y FALTANTES
+    // ========================================================================
+    $t_xml_ped = $wpdb->prefix . 'invfacil_xml_pedidos';
+    $t_xml_it  = $wpdb->prefix . 'invfacil_xml_items';
+
+    $sql11 = "CREATE TABLE $t_xml_ped (
+      nume_erp varchar(50) NOT NULL,
+      bodega_origen varchar(255) NOT NULL,
+      bodega_destino varchar(255) NOT NULL,
+      fecha_carga datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      PRIMARY KEY  (nume_erp)
+    ) $charset_collate;";
+    dbDelta( $sql11 );
+
+    $sql12 = "CREATE TABLE $t_xml_it (
+      id mediumint(9) NOT NULL AUTO_INCREMENT,
+      nume_erp varchar(50) NOT NULL,
+      codigo varchar(100) NOT NULL,
+      nombre varchar(255) NOT NULL,
+      unidad varchar(50) NOT NULL,
+      cant_solicitada float NOT NULL,
+      PRIMARY KEY  (id)
+    ) $charset_collate;";
+    dbDelta( $sql12 );
 
     // Auto-Reparación de la tabla de recepciones
     if($wpdb->get_var("SHOW TABLES LIKE '$t_recepciones'") == $t_recepciones) {
@@ -861,7 +886,7 @@ function invfacil_guardar_error_js() {
     wp_die(); 
 }
 // ========================================================================
-// DESCARGA DE ACTA CON DOBLE FIRMA DIGITAL EN PARALELO
+// DESCARGA DE ACTA CON DOBLE FIRMA Y COLUMNA DE FALTANTES
 // ========================================================================
 function invfacil_procesar_descarga_pdf_recepcion() {
     if (isset($_GET['descargar_pdf_recepcion']) && is_user_logged_in()) {
@@ -869,11 +894,10 @@ function invfacil_procesar_descarga_pdf_recepcion() {
         $recepcion_id = intval($_GET['descargar_pdf_recepcion']);
         $t_rec = $wpdb->prefix . 'invfacil_recepciones';
         $t_rec_it = $wpdb->prefix . 'invfacil_recepcion_items';
+        $t_xml_it = $wpdb->prefix . 'invfacil_xml_items';
 
         $rec = $wpdb->get_row($wpdb->prepare("SELECT * FROM $t_rec WHERE id = %d", $recepcion_id));
         if($rec) {
-            
-            // 🚀 LIMPIEZA DE BUFFER: Previene el error "Some data has already been output"
             if (ob_get_length()) { ob_end_clean(); }
 
             require_once plugin_dir_path( __FILE__ ) . 'includes/fpdf/fpdf.php';
@@ -885,54 +909,65 @@ function invfacil_procesar_descarga_pdf_recepcion() {
             $pdf->Cell(0, 10, utf8_decode('ACTA DE RECEPCIÓN DE SOLICITUDES VARIAS (TRASLADO)'), 1, 1, 'C');
             $pdf->Ln(5);
             $pdf->SetFont('Arial', '', 10);
-            // Le asignamos el ancho total (190) a las bodegas y forzamos el salto de línea con el '1'
-            $pdf->Cell(190, 8, utf8_decode('Bodega Origen: ' . $rec->bodega_origen), 1, 1, 'L');
-            $pdf->Cell(190, 8, utf8_decode('Bodega Destino: ' . $rec->bodega_destino), 1, 1, 'L');
-            // Mantenemos Número y Fecha compartiendo el ancho (95 cada uno)
-            $pdf->Cell(95, 8, utf8_decode('Número (Número ERP): ' . $rec->nume_erp), 1, 0, 'L');
-            $pdf->Cell(95, 8, utf8_decode('Fecha Recepción: ' . date('d/m/Y H:i', strtotime($rec->fecha_recepcion))), 1, 1, 'L');
+            
+            // Ancho disponible: 180mm
+            $pdf->Cell(180, 8, utf8_decode('Bodega Origen: ' . $rec->bodega_origen), 1, 1, 'L');
+            $pdf->Cell(180, 8, utf8_decode('Bodega Destino: ' . $rec->bodega_destino), 1, 1, 'L');
+            $pdf->Cell(90, 8, utf8_decode('Número (Número ERP): ' . $rec->nume_erp), 1, 0, 'L');
+            $pdf->Cell(90, 8, utf8_decode('Fecha Recepción: ' . date('d/m/Y H:i', strtotime($rec->fecha_recepcion))), 1, 1, 'L');
             
             $pdf->Ln(5);
-            $pdf->SetFont('Arial', 'B', 9);
-            $pdf->Cell(25, 8, 'CODIGO', 1, 0, 'C');
-            $pdf->Cell(110, 8, 'PRODUCTO', 1, 0, 'C');
-            $pdf->Cell(25, 8, 'UND.', 1, 0, 'C');
-            $pdf->Cell(30, 8, 'ENTREGADO', 1, 1, 'C');
+            $pdf->SetFont('Arial', 'B', 8);
+            $pdf->Cell(20, 8, 'CODIGO', 1, 0, 'C');
+            $pdf->Cell(75, 8, 'PRODUCTO', 1, 0, 'C');
+            $pdf->Cell(25, 8, 'SOLICITADO', 1, 0, 'C');
+            $pdf->Cell(30, 8, 'ENTREGADO', 1, 0, 'C');
+            $pdf->Cell(30, 8, 'FALTANTE', 1, 1, 'C');
 
-            $pdf->SetFont('Arial', '', 9);
+            $pdf->SetFont('Arial', '', 8);
             $items = $wpdb->get_results($wpdb->prepare("SELECT * FROM $t_rec_it WHERE recepcion_id = %d", $recepcion_id));
+            
             foreach($items as $p) {
-                $pdf->Cell(25, 8, utf8_decode($p->codigo), 1, 0, 'C');
-                $nombre_corto = strlen($p->nombre) > 60 ? substr($p->nombre, 0, 60) . '...' : $p->nombre;
-                $pdf->Cell(110, 8, utf8_decode($nombre_corto), 1, 0, 'L');
-                $pdf->Cell(25, 8, utf8_decode($p->unidad), 1, 0, 'C');
-                $pdf->Cell(30, 8, $p->cant_entregada, 1, 1, 'C');
+                // Consultar cuánto se solicitó originalmente en el XML
+                $solicitada = $wpdb->get_var($wpdb->prepare("SELECT cant_solicitada FROM $t_xml_it WHERE nume_erp = %s AND codigo = %s", $rec->nume_erp, $p->codigo));
+                
+                // Sumar todo lo que se ha entregado en la historia hasta esta acta
+                $entregado_historico = $wpdb->get_var($wpdb->prepare(
+                    "SELECT SUM(cant_entregada) FROM $t_rec_it it INNER JOIN $t_rec r ON it.recepcion_id = r.id WHERE r.nume_erp = %s AND it.codigo = %s AND r.id <= %d",
+                    $rec->nume_erp, $p->codigo, $recepcion_id
+                ));
+                
+                $faltante = max(0, floatval($solicitada) - floatval($entregado_historico));
+
+                $pdf->Cell(20, 8, utf8_decode($p->codigo), 1, 0, 'C');
+                $nombre_corto = strlen($p->nombre) > 42 ? substr($p->nombre, 0, 42) . '...' : $p->nombre;
+                $pdf->Cell(75, 8, utf8_decode($nombre_corto), 1, 0, 'L');
+                $pdf->Cell(25, 8, floatval($solicitada) . ' ' . utf8_decode($p->unidad), 1, 0, 'C');
+                $pdf->Cell(30, 8, floatval($p->cant_entregada), 1, 0, 'C');
+                $pdf->Cell(30, 8, floatval($faltante), 1, 1, 'C');
             }
 
             $pdf->Ln(15);
-            
             $x_inicial = $pdf->GetX();
             $y_inicial = $pdf->GetY();
             
-            // 1. Renderizar Firma de Quien Entrega
             $pdf->SetFont('Arial', 'B', 10);
-            $pdf->Cell(90, 8, utf8_decode('FIRMA DE QUIEN ENTREGA:'), 0, 0, 'L');
+            $pdf->Cell(90, 8, utf8_decode('FIRMA DE QUIEN ENTREGA:'), 0, 0, 'C');
             if (!empty($rec->firma_entrega)) {
                 $img_e = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $rec->firma_entrega));
                 $tmp_e = sys_get_temp_dir() . '/f_e_' . $recepcion_id . '_' . uniqid() . '.png';
                 file_put_contents($tmp_e, $img_e);
-                $pdf->Image($tmp_e, $x_inicial, $y_inicial + 8, 55, 22);
+                $pdf->Image($tmp_e, $x_inicial + 15, $y_inicial + 8, 60, 25);
                 unlink($tmp_e);
             }
             
-            // 2. Renderizar Firma de Quien Verifica / Recibe
-            $pdf->SetXY($x_inicial + 100, $y_inicial);
-            $pdf->Cell(90, 8, utf8_decode('FIRMA DE QUIEN VERIFICA / RECIBE:'), 0, 1, 'L');
+            $pdf->SetXY($x_inicial + 90, $y_inicial);
+            $pdf->Cell(90, 8, utf8_decode('FIRMA DE QUIEN VERIFICA / RECIBE:'), 0, 1, 'C');
             if (!empty($rec->firma_verifica)) {
                 $img_v = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $rec->firma_verifica));
                 $tmp_v = sys_get_temp_dir() . '/f_v_' . $recepcion_id . '_' . uniqid() . '.png';
                 file_put_contents($tmp_v, $img_v);
-                $pdf->Image($tmp_v, $x_inicial + 100, $y_inicial + 8, 55, 22);
+                $pdf->Image($tmp_v, $x_inicial + 90 + 15, $y_inicial + 8, 60, 25);
                 unlink($tmp_v);
             }
             
@@ -943,7 +978,6 @@ function invfacil_procesar_descarga_pdf_recepcion() {
 
             $pdf->SetFont('Arial', '', 10);
             $pdf->Cell(90, 8, utf8_decode('Entregado por: ' . $nombre_entregador), 'T', 0, 'C');
-            $pdf->Cell(10, 8, '', 0, 0);
             $pdf->Cell(90, 8, utf8_decode('Recibido por: ' . $nombre_receptor), 'T', 1, 'C');
 
             $pdf->Output('I', 'Recepcion_ERP_'.$rec->nume_erp.'.pdf');
